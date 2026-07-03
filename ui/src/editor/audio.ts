@@ -47,6 +47,16 @@ export class Player {
   private anchorAt = 0;
   private nativeLatency = 0;
   private pollTimer: number | null = null;
+  /** Native invokes run on a backend thread pool with NO ordering guarantee —
+   *  a fire-and-forget pause could execute after the play it should precede.
+   *  All native-engine calls are serialized through this chain. */
+  private chain: Promise<unknown> = Promise.resolve();
+
+  private queued<T>(fn: () => Promise<T>): Promise<T> {
+    const p = this.chain.then(fn);
+    this.chain = p.catch(() => {});
+    return p;
+  }
 
   /** Detect the native engine; call once before use. */
   async init(): Promise<void> {
@@ -134,7 +144,7 @@ export class Player {
   setNoteTimes(times: number[]): void {
     this.noteTimes = times;
     if (this.native) {
-      void api.nativeSetTicks(times, this.ticksEnabled).catch(() => {});
+      void this.queued(() => api.nativeSetTicks(times, this.ticksEnabled)).catch(() => {});
     } else if (this.playing) {
       this.tickIdx = lowerBound(times, this.time + 1e-6);
     }
@@ -143,7 +153,7 @@ export class Player {
   setTicksEnabled(enabled: boolean): void {
     this.ticksEnabled = enabled;
     if (this.native) {
-      void api.nativeSetTicks(this.noteTimes, enabled).catch(() => {});
+      void this.queued(() => api.nativeSetTicks(this.noteTimes, enabled)).catch(() => {});
     }
   }
 
@@ -155,7 +165,8 @@ export class Player {
       this.playing = true;
       this.anchorPos = this.startPos;
       this.anchorAt = performance.now();
-      void api.nativePlay(this.startPos, this.rate).catch((e) => {
+      const from = this.startPos;
+      void this.queued(() => api.nativePlay(from, this.rate)).catch((e) => {
         this.playing = false;
         this.stopPoll();
         this.onstate();
@@ -204,12 +215,13 @@ export class Player {
   pause(): void {
     if (!this.playing) return;
     if (this.native) {
+      // read the heard position while `time` still extrapolates (playing=true)
+      const heardNow = Math.max(0, this.time - this.nativeLatency);
       this.playing = false;
       this.stopPoll();
-      this.startPos = Math.max(0, this.time - this.nativeLatency);
+      this.startPos = heardNow;
       const epoch = ++this.posEpoch;
-      void api
-        .nativePause()
+      void this.queued(() => api.nativePause())
         .then((pos) => {
           // apply the backend's exact heard-position only if nothing
           // (a click-to-seek, a new play) has moved the position since
@@ -246,7 +258,7 @@ export class Player {
       this.anchorPos = target;
       this.anchorAt = performance.now();
       if (this.playing) {
-        void api.nativePlay(target, this.rate).catch(() => {});
+        void this.queued(() => api.nativePlay(target, this.rate)).catch(() => {});
       }
       this.onstate();
       return;
@@ -265,7 +277,7 @@ export class Player {
       if (this.playing) {
         this.anchorPos = cur;
         this.anchorAt = performance.now();
-        void api.nativePlay(cur, rate).catch(() => {});
+        void this.queued(() => api.nativePlay(cur, rate)).catch(() => {});
       }
       return;
     }
@@ -284,7 +296,7 @@ export class Player {
   private hardStop(): void {
     if (this.native) {
       this.stopPoll();
-      if (this.playing) void api.nativePause().catch(() => {});
+      if (this.playing) void this.queued(() => api.nativePause()).catch(() => {});
       this.playing = false;
       return;
     }
@@ -308,7 +320,8 @@ export class Player {
   private async poll(): Promise<void> {
     let p: { raw: number; display: number; playing: boolean };
     try {
-      p = await api.nativePosition();
+      // queued so a poll can never observe state from before a pending play
+      p = await this.queued(() => api.nativePosition());
     } catch {
       return;
     }
