@@ -8,6 +8,16 @@ mod server;
 use tauri::Manager;
 
 fn main() {
+    // WebKitGTK plays audio through GStreamer's pulsesink. On bridged audio
+    // stacks (WSLg, some PipeWire setups) the default fragment size is tiny
+    // and underruns audibly whenever the CPU spikes — heard as crackling or
+    // stuttering playback. A bigger stream buffer fixes it; respect the
+    // user's own value if they set one.
+    if std::env::var_os("PULSE_LATENCY_MSEC").is_none() {
+        // SAFETY: called before any other thread exists (pre-Tauri init).
+        unsafe { std::env::set_var("PULSE_LATENCY_MSEC", "100") };
+    }
+
     tauri::Builder::default()
         .manage(server::ServerState::new())
         .setup(|app| {

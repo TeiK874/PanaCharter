@@ -87,6 +87,14 @@ export class Player {
     );
   }
 
+  /** What the listener is hearing right now — `time` minus the output pipeline
+   *  latency. Use for the playhead/time display; use `time` for editing. */
+  get displayTime(): number {
+    if (!this.playing || !this.src) return this.startPos;
+    const latency = (this.ctx.outputLatency || this.ctx.baseLatency || 0) * this.rate;
+    return Math.max(0, this.time - latency);
+  }
+
   setNoteTimes(times: number[]): void {
     this.noteTimes = times;
     if (this.playing) this.tickIdx = lowerBound(times, this.time + 1e-6);

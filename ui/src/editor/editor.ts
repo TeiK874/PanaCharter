@@ -628,7 +628,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       duration: duration(),
       notes: doc().notes,
       selection: doc().selection,
-      cursor: player.time,
+      cursor: player.displayTime,
       peaks: player.peaks,
       peaksPerSec: player.peaksPerSec,
       ghost,
@@ -994,7 +994,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       needsDraw = true;
       // keep the playhead in view
       const span = renderer.timeSpan(viewState());
-      const cur = player.time;
+      const cur = player.displayTime;
       if (cur > scroll + span * 0.75 || cur < scroll) {
         scroll = cur - span * 0.25;
       }
