@@ -24,6 +24,10 @@ scores; unchanged audio/jackets are not re-sent.
   SIF1/NPPS4 JSON, official SIF2 NoteData (served JSON + Unity `.asset` YAML),
   Bandori `.note` (BMS, rules matched to `bandori-sif2-tools`), Bestdori JSON.
   Adding a format = one module implementing `ChartConverter` + one registry line.
+- `src-tauri/src/bundle.rs` — minimal UnityFS AssetBundle reader: feed Import a raw
+  `.unity3d`/musicscore bundle and it extracts TextAsset charts (Bandori) and
+  `Aoharu.NoteData` MonoBehaviours (SIF2) directly, with a picker when a bundle
+  holds several difficulties.
 
 ## Dependencies
 

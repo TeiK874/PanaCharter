@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod bundle;
 mod projects;
 mod server;
 
@@ -38,6 +39,7 @@ fn main() {
             projects::project_get_jacket,
             projects::project_export,
             projects::project_import_zip,
+            bundle::bundle_extract_charts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

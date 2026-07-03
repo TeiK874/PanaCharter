@@ -74,3 +74,11 @@ export const projectGetJacket = (id: string) =>
 export const projectExport = (id: string) => invoke<string>("project_export", { id });
 export const projectImportZip = (bytes: ArrayBuffer) =>
   invokeBinary<ProjectSummary>("project_import_zip", bytes);
+
+export interface ChartCandidate {
+  name: string;
+  kind: string; // "text" | "notedata"
+  content: string;
+}
+export const bundleExtractCharts = (bytes: ArrayBuffer) =>
+  invokeBinary<ChartCandidate[]>("bundle_extract_charts", bytes);

@@ -9,7 +9,7 @@ import { Renderer } from "./render.js";
 import type { DrawState, Orientation } from "./render.js";
 import { openMetadataDialog } from "../views/metadata.js";
 import { openUploadDialog } from "../views/upload.js";
-import { importChart } from "../convert/index.js";
+import { CONVERTERS, importChart } from "../convert/index.js";
 
 export interface EditorView {
   root: HTMLElement;
@@ -332,7 +332,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       el("button", {
         class: "btn",
         text: "⤓ Import",
-        title: "Import a chart file into this difficulty (SIF1, SIF2 NoteData, Bandori…)",
+        title: "Import a chart into this difficulty — SIF1/SIF2/Bandori/Bestdori files or Unity asset bundles (.unity3d)",
         onclick: () => void importChartFlow(),
       }),
     ),
@@ -504,12 +504,66 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     });
   }
 
+  function pickBundleChart(candidates: api.ChartCandidate[]): Promise<api.ChartCandidate | null> {
+    return new Promise((resolve) => {
+      let picked: api.ChartCandidate | null = null;
+      const dlg = openDialog(
+        "Which chart from this bundle?",
+        el(
+          "div",
+          { class: "row wrap", style: "gap:6px" },
+          ...candidates.map((c) =>
+            el("button", {
+              class: "btn",
+              text: c.name,
+              onclick: () => {
+                picked = c;
+                dlg.close();
+              },
+            }),
+          ),
+        ),
+      );
+      dlg.root.addEventListener("close", () => resolve(picked));
+    });
+  }
+
   async function importChartFlow(): Promise<void> {
-    const file = await pickFile(".json,.asset,.txt,application/json");
+    const file = await pickFile(".json,.asset,.txt,.note,.unity3d,.bundle,application/json");
     if (!file) return;
+    let text: string;
+    const head = new Uint8Array(file.bytes.slice(0, 7));
+    if (String.fromCharCode(...head) === "UnityFS") {
+      let candidates: api.ChartCandidate[];
+      try {
+        candidates = await api.bundleExtractCharts(file.bytes);
+      } catch (e) {
+        toast(String(e), "error");
+        return;
+      }
+      const importable = candidates.filter((c) =>
+        CONVERTERS.some((cv) => {
+          try {
+            return cv.detect(c.content);
+          } catch {
+            return false;
+          }
+        }),
+      );
+      if (!importable.length) {
+        toast("The bundle contains no charts in a supported format", "error");
+        return;
+      }
+      const chosen =
+        importable.length === 1 ? importable[0] : await pickBundleChart(importable);
+      if (!chosen) return;
+      text = chosen.content;
+    } else {
+      text = new TextDecoder().decode(file.bytes);
+    }
     let result: ReturnType<typeof importChart>;
     try {
-      result = importChart(new TextDecoder().decode(file.bytes));
+      result = importChart(text);
     } catch (e) {
       toast(String(e), "error");
       return;
