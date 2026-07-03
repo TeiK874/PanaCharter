@@ -20,6 +20,10 @@ scores; unchanged audio/jackets are not re-sent.
   `withGlobalTauri` bridge.
 - Charts are stored and exchanged in the SIF1/NPPS4 JSON schema (the server's upload
   format); the server transcodes to SIF2 NoteData on upload.
+- `ui/src/convert/` — chart importers (⤓ Import in the editor, auto-detected):
+  SIF1/NPPS4 JSON, official SIF2 NoteData (served JSON + Unity `.asset` YAML),
+  Bandori `.note` (BMS, rules matched to `bandori-sif2-tools`), Bestdori JSON.
+  Adding a format = one module implementing `ChartConverter` + one registry line.
 
 ## Dependencies
 

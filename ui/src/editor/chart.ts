@@ -174,16 +174,24 @@ export class ChartDoc {
       if (!laneList) byLane.set(n.lane, (laneList = []));
       laneList.push(n);
     }
-    // overlaps within a lane: a note landing inside a hold's body is unplayable
+    // overlaps within a lane: inside a hold's body is unplayable, and a note
+    // stacked exactly on a hold's tail crashes the SIF2 runtime (NRE)
     for (const [lane, list] of byLane) {
       for (let i = 0; i < list.length - 1; i++) {
         const cur = list[i];
         if (cur.kind !== "hold") continue;
         const next = list[i + 1];
-        if (next.t < cur.t + cur.dur - EPS) {
+        const end = cur.t + cur.dur;
+        if (next.t < end - EPS) {
           out.push({
             message: `Lane ${lane}: note at ${next.t.toFixed(3)}s lands inside the hold starting at ${cur.t.toFixed(3)}s`,
             severity: "warning",
+            noteId: next.id,
+          });
+        } else if (next.t < end + EPS) {
+          out.push({
+            message: `Lane ${lane}: note at ${next.t.toFixed(3)}s sits exactly on a hold's tail — this crashes the game; leave a gap`,
+            severity: "error",
             noteId: next.id,
           });
         }

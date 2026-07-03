@@ -9,6 +9,7 @@ import { Renderer } from "./render.js";
 import type { DrawState, Orientation } from "./render.js";
 import { openMetadataDialog } from "../views/metadata.js";
 import { openUploadDialog } from "../views/upload.js";
+import { importChart } from "../convert/index.js";
 
 export interface EditorView {
   root: HTMLElement;
@@ -322,7 +323,19 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       el("button", { class: "btn", text: "← Library", onclick: () => goBack() }),
       titleBtn,
     ),
-    el("div", { class: "group" }, tabsHost, el("span", { class: "mini-label", text: "★" }), starInput),
+    el(
+      "div",
+      { class: "group" },
+      tabsHost,
+      el("span", { class: "mini-label", text: "★" }),
+      starInput,
+      el("button", {
+        class: "btn",
+        text: "⤓ Import",
+        title: "Import a chart file into this difficulty (SIF1, SIF2 NoteData, Bandori…)",
+        onclick: () => void importChartFlow(),
+      }),
+    ),
     el(
       "div",
       { class: "group" },
@@ -489,6 +502,50 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       },
       onAudioChanged: () => void attempt(loadAudio),
     });
+  }
+
+  async function importChartFlow(): Promise<void> {
+    const file = await pickFile(".json,.asset,.txt,application/json");
+    if (!file) return;
+    let result: ReturnType<typeof importChart>;
+    try {
+      result = importChart(new TextDecoder().decode(file.bytes));
+    } catch (e) {
+      toast(String(e), "error");
+      return;
+    }
+    const d = doc();
+    if (
+      d.notes.length &&
+      !(await confirmDialog(
+        `Replace the current ${DIFFICULTIES[level].name} chart (${d.notes.length} notes) with the imported ${result.format} chart (${result.notes.length} notes)?`,
+        "Replace",
+      ))
+    ) {
+      return;
+    }
+    d.edit(() => {
+      d.notes.length = 0;
+      d.selection.clear();
+      for (const n of result.notes) {
+        const kind = n.effect === 3 && n.effect_value > 0 ? "hold" : n.effect === 4 ? "star" : "tap";
+        d.place(n.timing_sec, n.position, kind, kind === "hold" ? n.effect_value : 0);
+      }
+    });
+    const warnings = [...result.warnings];
+    if (result.bpm && result.bpm !== manifest.bpm) {
+      manifest.bpm = result.bpm;
+      bpmInput.value = String(result.bpm);
+      warnings.push(`BPM set to ${result.bpm} (from the imported chart).`);
+    }
+    if (warnings.length) {
+      openDialog(
+        `Imported ${result.notes.length} notes (${result.format})`,
+        ...warnings.map((w) => el("p", { class: "dialog-body", text: `⚠ ${w}` })),
+      );
+    } else {
+      toast(`Imported ${result.notes.length} notes from ${result.format}`, "ok");
+    }
   }
 
   async function upload(): Promise<void> {
