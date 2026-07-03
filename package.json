@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build": "tsc && mkdir -p ui/dist && cp ui/index.html ui/styles.css ui/dist/",
+    "build": "tsc && node -e \"const fs=require('fs');fs.mkdirSync('ui/dist',{recursive:true});for(const f of ['index.html','styles.css'])fs.copyFileSync('ui/'+f,'ui/dist/'+f)\"",
     "watch": "tsc -w",
     "tauri": "tauri"
   },

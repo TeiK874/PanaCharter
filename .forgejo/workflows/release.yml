@@ -1,0 +1,182 @@
+name: Build release binaries
+
+on:
+  push:
+    branches: '**'
+    tags: '*'
+
+jobs:
+  # ── Linux build ────────────────────────────────────────────────────────
+  linux-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checking out branch
+        uses: actions/checkout@v3
+
+      - name: Install Rust
+        shell: bash
+        run: curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal
+
+      - name: Install Linux Tauri prerequisites
+        shell: bash
+        # Tauri 2 on Linux needs webkit2gtk-4.1 + the usual gtk stack.
+        # Node is only a build tool here (tsc); most runner images ship it,
+        # apt fills the gap if not.
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            librsvg2-dev \
+            build-essential \
+            pkg-config
+          command -v node >/dev/null || sudo apt install -y nodejs npm
+
+      - name: Build frontend (tsc → ui/dist)
+        shell: bash
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build Linux Tauri binary
+        shell: bash
+        # Release builds embed ui/dist into the binary (Tauri 2 does this
+        # automatically; no custom-protocol feature flag like Tauri 1).
+        run: |
+          . "$HOME/.cargo/env"
+          cd src-tauri
+          cargo build --release
+
+      - name: Stage Linux artefacts
+        shell: bash
+        run: |
+          mkdir -p out
+          cp src-tauri/target/release/charter out/charter-linux-x86_64
+
+      - name: Upload Linux artefacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-build
+          path: ./out/
+
+  # ── Windows build (native, on the registered Windows runner) ───────────
+  windows-build:
+    runs-on: windows-latest
+    # Self-hosted Windows runners typically have no `bash` on PATH, so
+    # default every step to PowerShell.
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Checking out branch
+        uses: actions/checkout@v3
+
+      - name: Ensure Rust toolchain is available
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+              Write-Host "Installing rustup..."
+              $rustup = Join-Path $env:RUNNER_TEMP "rustup-init.exe"
+              Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustup
+              & $rustup -y --default-toolchain stable --profile minimal --no-modify-path
+              if ($LASTEXITCODE -ne 0) { throw "rustup-init failed ($LASTEXITCODE)" }
+              $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+              $env:PATH = "$cargoBin;$env:PATH"
+              Add-Content -Path $env:GITHUB_PATH -Value $cargoBin
+          }
+          rustc --version
+          cargo --version
+
+      - name: Verify Node + npm
+        # Assumes Node 18+ is installed on the runner. Fails fast if not.
+        run: |
+          $ErrorActionPreference = "Stop"
+          node --version
+          npm --version
+
+      - name: Build frontend (tsc → ui/dist)
+        run: |
+          $ErrorActionPreference = "Stop"
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw "npm ci failed ($LASTEXITCODE)" }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw "npm run build failed ($LASTEXITCODE)" }
+
+      - name: Build Windows Tauri binary
+        # Native MSVC build — needs Visual Studio Build Tools (cl.exe +
+        # Windows SDK) on the runner. The WebView2 runtime is preinstalled
+        # on Win10/11 for end users.
+        run: |
+          $ErrorActionPreference = "Stop"
+          Push-Location src-tauri
+          cargo build --release
+          if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
+          Pop-Location
+
+      - name: Stage Windows artefacts
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path out -Force | Out-Null
+          Copy-Item -Path src-tauri\target\release\charter.exe `
+                    -Destination out\charter-windows-x86_64.exe -Force
+
+      - name: Upload Windows artefacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: windows-build
+          path: ./out/
+
+  # ── Combine + publish ──────────────────────────────────────────────────
+  release:
+    runs-on: ubuntu-latest
+    needs: [linux-build, windows-build]
+    steps:
+      - name: Download Linux artefacts
+        uses: actions/download-artifact@v3
+        with:
+          name: linux-build
+          path: ./linux/
+
+      - name: Download Windows artefacts
+        uses: actions/download-artifact@v3
+        with:
+          name: windows-build
+          path: ./windows/
+
+      - name: Merge into a single out/ tree
+        shell: bash
+        run: |
+          mkdir -p out
+          cp linux/charter-linux-x86_64         out/
+          cp windows/charter-windows-x86_64.exe out/
+          chmod +x out/charter-linux-x86_64
+          cat > out/README.txt <<'EOF'
+          Charter — SIF2 beatmap editor
+          =============================
+
+          Run:
+            charter-linux-x86_64         (Linux x86_64; needs webkit2gtk-4.1 installed)
+            charter-windows-x86_64.exe   (Windows x86_64; needs the WebView2 runtime,
+                                          preinstalled on Windows 10/11)
+          EOF
+          ls -la out/
+
+      - name: Upload combined artefact
+        if: startsWith(github.ref, 'refs/heads/')
+        uses: actions/upload-artifact@v3
+        with:
+          name: charter
+          path: ./out/
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: actions/forgejo-release@v2
+        with:
+          direction: upload
+          release-dir: ./out/
+          release-notes-assistant: true
+          tag: "${{ github.ref_name }}"
+          sha: "${{ github.sha }}"
+          title: "Release ${{ github.ref_name }}"
+          token: ${{ github.token }}

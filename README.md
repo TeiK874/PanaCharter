@@ -3,11 +3,12 @@
 A desktop beatmap editor for SIF2 (Love Live! School Idol Festival 2) custom songs,
 built with Tauri + Rust and a dependency-free vanilla-TypeScript frontend.
 
-Talks to an [ew](../ew-custom-songs) custom-songs server: log in with your user ID +
-transfer password, chart locally, then upload / manage visibility / browse / download
-other people's songs as editable projects. Re-uploading a project you already
-published offers **update in place** (`POST /custom_song/update`) — the song keeps its
-music id and players keep their scores; unchanged audio/jackets are not re-sent.
+Talks to an [ew](https://git.ethanthesleepy.one/ethanaobrien/ew) custom-songs server:
+log in with your user ID + transfer password, chart locally, then upload / manage
+visibility / browse / download other people's songs as editable projects.
+Re-uploading a project you already published offers **update in place**
+(`POST /custom_song/update`) — the song keeps its music id and players keep their
+scores; unchanged audio/jackets are not re-sent.
 
 ## Layout
 
@@ -19,6 +20,30 @@ music id and players keep their scores; unchanged audio/jackets are not re-sent.
   `withGlobalTauri` bridge.
 - Charts are stored and exchanged in the SIF1/NPPS4 JSON schema (the server's upload
   format); the server transcodes to SIF2 NoteData on upload.
+
+## Dependencies
+
+Rust (stable, via [rustup](https://rustup.rs)) and Node.js 18+ everywhere, plus the
+Tauri 2 system libraries:
+
+### Ubuntu / Debian
+
+```sh
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+                 librsvg2-dev build-essential pkg-config curl
+```
+
+### Fedora
+
+```sh
+sudo dnf install webkit2gtk4.1-devel gtk3-devel libsoup3-devel librsvg2-devel \
+                 gcc gcc-c++ make pkgconf-pkg-config
+```
+
+### Windows
+
+Visual Studio Build Tools (the "Desktop development with C++" workload). The
+WebView2 runtime is preinstalled on Windows 10/11.
 
 ## Develop
 
@@ -34,10 +59,28 @@ npm run watch        # optional: tsc -w in a second terminal; Ctrl+R reloads the
 npx tauri build --no-bundle   # binary at src-tauri/target/release/charter
 ```
 
+CI does this automatically: `.forgejo/workflows/release.yml` builds Linux + Windows
+binaries on every push and attaches them to a Forgejo release on every tag.
+
 ## Editor quick reference
 
-Tools: 1 select · 2 tap · 3 hold (drag for length) · 4 star. Right-click deletes,
-drag moves, drag a hold's tail to resize. Space plays, arrows step the playhead by
-one snap division, Ctrl+wheel zooms, the ⇆ button flips between vertical-scroll and
-horizontal-timeline layouts. Everything autosaves; press ？ in the toolbar for the
-full shortcut list.
+| Input | Action |
+|---|---|
+| `1` / `2` / `3` / `4` | Select / Tap / Hold / Star tool |
+| Click | Place note (drag to set a hold's length) |
+| Drag note | Move it · drag a hold's **tail** to resize |
+| Right-click | Delete note |
+| Shift+click | Add to / remove from selection |
+| Drag on empty space (select tool) | Box select |
+| `Del` | Delete selection |
+| `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste at the playhead |
+| `Ctrl+A` | Select all |
+| `Space` | Play / pause |
+| `Home` / `End` | Jump to start / end |
+| `↑` / `↓` (or `←` / `→`) | Step the playhead by one snap division |
+| Wheel | Scroll · `Ctrl`+wheel zoom · middle-drag pan |
+| Click the waveform | Seek |
+| ⇆ toolbar button | Toggle vertical-scroll ⇄ horizontal-timeline layout |
+
+Everything autosaves; press **？** in the toolbar for this list in-app.
