@@ -9,6 +9,23 @@ mod server;
 use tauri::Manager;
 
 fn main() {
+    // Dev builds serve the frontend from disk, and WebKitGTK's HTTP cache
+    // keeps serving stale JS across rebuilds (tauri:// responses carry no
+    // validators). Drop the cache before the webview spins up so a dev
+    // relaunch always runs current code. Release builds embed their assets.
+    #[cfg(all(debug_assertions, target_os = "linux"))]
+    {
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".local/share"))
+            });
+        if let Some(base) = data_home {
+            let _ = std::fs::remove_dir_all(base.join("dev.ethanobrien.charter/WebKitCache"));
+        }
+    }
+
     tauri::Builder::default()
         .manage(server::ServerState::new())
         .manage(audio_native::NativeAudio::new())
