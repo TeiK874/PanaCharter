@@ -1,0 +1,4 @@
+node_modules/
+src-tauri/target/
+ui/dist/*
+!ui/dist/.gitkeep

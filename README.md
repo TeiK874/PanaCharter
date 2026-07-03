@@ -1,0 +1,43 @@
+# Charter ♪
+
+A desktop beatmap editor for SIF2 (Love Live! School Idol Festival 2) custom songs,
+built with Tauri + Rust and a dependency-free vanilla-TypeScript frontend.
+
+Talks to an [ew](../ew-custom-songs) custom-songs server: log in with your user ID +
+transfer password, chart locally, then upload / manage visibility / browse / download
+other people's songs as editable projects. Re-uploading a project you already
+published offers **update in place** (`POST /custom_song/update`) — the song keeps its
+music id and players keep their scores; unchanged audio/jackets are not re-sent.
+
+## Layout
+
+- `src-tauri/` — Rust backend: ew server HTTP client (`server.rs`), local project
+  store (`projects.rs`, mirrors the server's export-package format), symphonia audio
+  decoding (`audio.rs`).
+- `ui/` — frontend. No framework, no bundler: `tsc` emits native ES modules into
+  `ui/dist/js`, `index.html`/`styles.css` are copied alongside. Tauri IPC via the
+  `withGlobalTauri` bridge.
+- Charts are stored and exchanged in the SIF1/NPPS4 JSON schema (the server's upload
+  format); the server transcodes to SIF2 NoteData on upload.
+
+## Develop
+
+```sh
+npm install
+npx tauri dev        # runs `npm run build` first, then launches the app
+npm run watch        # optional: tsc -w in a second terminal; Ctrl+R reloads the webview
+```
+
+## Build a release binary
+
+```sh
+npx tauri build --no-bundle   # binary at src-tauri/target/release/charter
+```
+
+## Editor quick reference
+
+Tools: 1 select · 2 tap · 3 hold (drag for length) · 4 star. Right-click deletes,
+drag moves, drag a hold's tail to resize. Space plays, arrows step the playhead by
+one snap division, Ctrl+wheel zooms, the ⇆ button flips between vertical-scroll and
+horizontal-timeline layouts. Everything autosaves; press ？ in the toolbar for the
+full shortcut list.

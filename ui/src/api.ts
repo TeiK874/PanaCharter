@@ -1,0 +1,76 @@
+import { invoke, invokeBinary } from "./tauri.js";
+import type {
+  CatalogSong,
+  EditorMeta,
+  Manifest,
+  ProjectData,
+  ProjectSummary,
+  SessionInfo,
+  SifNote,
+} from "./types.js";
+
+// --- server ---------------------------------------------------------------
+
+export const connect = (server: string) => invoke<unknown>("connect", { server });
+export const login = (uid: number, password: string) =>
+  invoke<void>("login", { uid, password });
+export const logout = () => invoke<void>("logout");
+export const sessionInfo = () => invoke<SessionInfo>("session_info");
+export const listMine = () => invoke<CatalogSong[]>("list_mine");
+export const browseSongs = () => invoke<CatalogSong[]>("browse_songs");
+export const setVisibility = (
+  musicId: number,
+  visibility: string,
+  sharedWith: number[],
+  downloadsDisabled: boolean,
+) =>
+  invoke<void>("set_visibility", {
+    musicId,
+    visibility,
+    sharedWith,
+    downloadsDisabled,
+  });
+export const deleteSong = (musicId: number) => invoke<void>("delete_song", { musicId });
+export const fetchJacket = (musicId: number) =>
+  invoke<ArrayBuffer>("fetch_jacket", { musicId });
+export const uploadProject = (
+  projectId: string,
+  visibility: string,
+  sharedWith: number[],
+  downloadsDisabled: boolean,
+) =>
+  invoke<number>("upload_project", {
+    projectId,
+    visibility,
+    sharedWith,
+    downloadsDisabled,
+  });
+export const updateSong = (projectId: string, musicId: number) =>
+  invoke<number>("update_project", { projectId, musicId });
+export const downloadSongToProject = (musicId: number) =>
+  invoke<ProjectSummary>("download_song_to_project", { musicId });
+
+// --- local projects --------------------------------------------------------
+
+export const projectList = () => invoke<ProjectSummary[]>("project_list");
+export const projectCreate = (name: string, artist: string) =>
+  invoke<ProjectSummary>("project_create", { name, artist });
+export const projectLoad = (id: string) => invoke<ProjectData>("project_load", { id });
+export const projectSave = (
+  id: string,
+  manifest: Manifest,
+  editor: EditorMeta,
+  charts: Record<string, SifNote[]>,
+) => invoke<void>("project_save", { id, manifest, editor, charts });
+export const projectDelete = (id: string) => invoke<void>("project_delete", { id });
+export const projectSetAudio = (id: string, bytes: ArrayBuffer) =>
+  invokeBinary<string>("project_set_audio", bytes, { "x-project-id": id });
+export const projectSetJacket = (id: string, bytes: ArrayBuffer) =>
+  invokeBinary<string>("project_set_jacket", bytes, { "x-project-id": id });
+export const projectLoadAudio = (id: string) =>
+  invoke<ArrayBuffer>("project_load_audio", { id });
+export const projectGetJacket = (id: string) =>
+  invoke<ArrayBuffer>("project_get_jacket", { id });
+export const projectExport = (id: string) => invoke<string>("project_export", { id });
+export const projectImportZip = (bytes: ArrayBuffer) =>
+  invokeBinary<ProjectSummary>("project_import_zip", bytes);
