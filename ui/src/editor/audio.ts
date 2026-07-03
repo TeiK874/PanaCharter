@@ -25,6 +25,10 @@ export class Player {
   private native = false;
   private durationSec = 0;
   private startPos = 0; // paused position (both backends)
+  /** Bumped whenever startPos is set on purpose — lets late async replies
+   *  (nativePause's heard-position correction) detect they've been superseded
+   *  by a newer seek/play instead of clobbering it. */
+  private posEpoch = 0;
   private noteTimes: number[] = [];
 
   // --- web backend ---
@@ -81,6 +85,7 @@ export class Player {
       }
       this.buffer = buffer;
     }
+    this.posEpoch++;
     this.startPos = 0;
     this.anchorPos = 0;
     this.onstate();
@@ -144,6 +149,7 @@ export class Player {
 
   play(): void {
     if (!this.loaded || this.playing) return;
+    this.posEpoch++;
     if (this.startPos >= this.durationSec - 0.005) this.startPos = 0;
     if (this.native) {
       this.playing = true;
@@ -201,11 +207,16 @@ export class Player {
       this.playing = false;
       this.stopPoll();
       this.startPos = Math.max(0, this.time - this.nativeLatency);
+      const epoch = ++this.posEpoch;
       void api
         .nativePause()
         .then((pos) => {
-          this.startPos = pos;
-          this.onstate();
+          // apply the backend's exact heard-position only if nothing
+          // (a click-to-seek, a new play) has moved the position since
+          if (epoch === this.posEpoch && !this.playing) {
+            this.startPos = pos;
+            this.onstate();
+          }
         })
         .catch(() => {});
       this.onstate();
@@ -222,12 +233,14 @@ export class Player {
 
   stop(): void {
     this.hardStop();
+    this.posEpoch++;
     this.startPos = 0;
     this.onstate();
   }
 
   seek(t: number): void {
     const target = Math.max(0, Math.min(this.durationSec, t));
+    this.posEpoch++;
     if (this.native) {
       this.startPos = target;
       this.anchorPos = target;
