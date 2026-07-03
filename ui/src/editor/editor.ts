@@ -65,7 +65,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   let clipboard: { dt: number; lane: number; kind: NoteKind; dur: number }[] = [];
 
   const player = new Player();
-  player.ticksEnabled = true;
+  await player.init();
 
   const bpm = () => manifest.bpm ?? 120;
   const gridStep = () => 60 / Math.max(1, bpm()) / snap;
@@ -75,7 +75,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     for (const d of docs.values()) for (const n of d.notes) last = Math.max(last, n.t + n.dur + 10);
     return last;
   };
-  const duration = () => (player.buffer ? player.duration : fallbackDuration());
+  const duration = () => (player.loaded ? player.duration : fallbackDuration());
 
   function snapTime(t: number): number {
     const clamped = Math.max(0, t);
@@ -297,7 +297,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     text: "🔔",
     title: "Note ticks during playback",
     onclick: () => {
-      player.ticksEnabled = !player.ticksEnabled;
+      player.setTicksEnabled(!player.ticksEnabled);
       tickBtn.classList.toggle("active", player.ticksEnabled);
     },
   });
@@ -436,7 +436,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     saveSpan.className = `save-state ${saveState === "saved" ? "saved" : "dirty"}`;
     comboSpan.textContent = `combo ${doc().comboCount}`;
     selSpan.textContent = doc().selection.size ? `sel ${doc().selection.size}` : "";
-    const issues = doc().issues(player.buffer ? player.duration : 0);
+    const issues = doc().issues(player.loaded ? player.duration : 0);
     const errors = issues.filter((i) => i.severity === "error").length;
     issuesSpan.textContent = issues.length
       ? `⚠ ${issues.length} issue${issues.length > 1 ? "s" : ""}`
@@ -445,7 +445,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   }
 
   function showIssues(): void {
-    const issues = doc().issues(player.buffer ? player.duration : 0);
+    const issues = doc().issues(player.loaded ? player.duration : 0);
     openDialog(
       `${DIFFICULTIES[level].name} — chart issues`,
       issues.length

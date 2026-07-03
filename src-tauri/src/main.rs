@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod audio_native;
 mod bundle;
 mod projects;
 mod server;
@@ -8,18 +9,9 @@ mod server;
 use tauri::Manager;
 
 fn main() {
-    // WebKitGTK plays audio through GStreamer's pulsesink. On bridged audio
-    // stacks (WSLg, some PipeWire setups) the default fragment size is tiny
-    // and underruns audibly whenever the CPU spikes — heard as crackling or
-    // stuttering playback. A bigger stream buffer fixes it; respect the
-    // user's own value if they set one.
-    if std::env::var_os("PULSE_LATENCY_MSEC").is_none() {
-        // SAFETY: called before any other thread exists (pre-Tauri init).
-        unsafe { std::env::set_var("PULSE_LATENCY_MSEC", "100") };
-    }
-
     tauri::Builder::default()
         .manage(server::ServerState::new())
+        .manage(audio_native::NativeAudio::new())
         .setup(|app| {
             let state = app.state::<server::ServerState>();
             server::load_saved_session(app.handle(), &state);
@@ -50,6 +42,11 @@ fn main() {
             projects::project_export,
             projects::project_import_zip,
             bundle::bundle_extract_charts,
+            audio_native::native_available,
+            audio_native::native_play,
+            audio_native::native_pause,
+            audio_native::native_position,
+            audio_native::native_set_ticks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

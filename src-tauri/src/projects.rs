@@ -454,11 +454,18 @@ pub fn project_set_jacket(app: AppHandle, request: tauri::ipc::Request<'_>) -> R
 /// Response layout (little-endian): `u32 sample_rate | u32 channels | u32 frames |
 /// i16 interleaved samples…`.
 #[tauri::command]
-pub fn project_load_audio(app: AppHandle, id: String) -> Result<tauri::ipc::Response, String> {
+pub fn project_load_audio(
+    app: AppHandle,
+    native: tauri::State<'_, crate::audio_native::NativeAudio>,
+    id: String,
+) -> Result<tauri::ipc::Response, String> {
     let dir = project_dir(&app, &id)?;
     let (ext, path) = find_asset(&dir, "audio").ok_or("Project has no audio yet")?;
     let bytes = fs::read(path).map_err(es)?;
     let (rate, channels, pcm) = crate::audio::decode_to_pcm(bytes, Some(&ext))?;
+    // hand the native player its copy — it becomes the playback engine when
+    // PulseAudio is reachable; the returned PCM still drives the waveform
+    native.set_pcm(rate, channels, pcm.clone());
     let frames = (pcm.len() as u32) / channels;
     let mut buf = Vec::with_capacity(12 + pcm.len() * 2);
     buf.extend_from_slice(&rate.to_le_bytes());

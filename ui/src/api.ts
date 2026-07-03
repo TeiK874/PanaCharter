@@ -82,3 +82,14 @@ export interface ChartCandidate {
 }
 export const bundleExtractCharts = (bytes: ArrayBuffer) =>
   invokeBinary<ChartCandidate[]>("bundle_extract_charts", bytes);
+
+// --- native audio engine (Linux PulseAudio; absent elsewhere) ---------------
+
+export const nativeAvailable = () => invoke<boolean>("native_available");
+export const nativePlay = (fromSec: number, rate: number) =>
+  invoke<void>("native_play", { fromSec, rate });
+export const nativePause = () => invoke<number>("native_pause");
+export const nativePosition = () =>
+  invoke<{ raw: number; display: number; playing: boolean }>("native_position");
+export const nativeSetTicks = (times: number[], enabled: boolean) =>
+  invoke<void>("native_set_ticks", { times, enabled });
