@@ -5,9 +5,12 @@
 // same verified .note converter the single-chart importer uses.
 
 import * as api from "../api.js";
-import { el, openDialog, pickFiles, toast } from "../dom.js";
+import { el, openDialog, pickDirFiles, pickFiles, toast } from "../dom.js";
 import { importChart } from "../convert/index.js";
 import type { SifNote } from "../types.js";
+
+/** Files in a Bandori assets tree that are worth scanning. */
+const BUNDLE_NAME = /^(musicscore|musicjacket|bgm)\d+$/;
 
 /** bandori difficulty → ew chart level (special/command are not importable). */
 const DIFF_LEVEL: [string, number][] = [
@@ -42,6 +45,12 @@ export function openBandoriBatchDialog(onDone: () => void): void {
     class: "btn",
     text: "Add bundle files…",
     onclick: () => void addBundles(),
+  });
+  const addDirBtn = el("button", {
+    class: "btn",
+    text: "Add folder…",
+    title: "Scan a folder (e.g. the assets Android/ tree) — musicscore/bgm/musicjacket bundles are auto-detected by name",
+    onclick: () => void addFolder(),
   });
 
   function renderTable(): void {
@@ -105,25 +114,32 @@ export function openBandoriBatchDialog(onDone: () => void): void {
     importBtn.disabled = !rows.length || busy;
   }
 
-  async function addBundles(): Promise<void> {
-    const files = await pickFiles(".bundle,.unity3d,*");
-    if (!files.length) return;
+  async function scanAll(
+    files: { name: string; read: () => Promise<ArrayBuffer> }[],
+    quietErrors: boolean,
+  ): Promise<void> {
     busy = true;
     addBtn.disabled = true;
+    addDirBtn.disabled = true;
     let done = 0;
+    let skipped = 0;
     for (const file of files) {
       statusLine.textContent = `Scanning ${file.name} (${++done}/${files.length})…`;
       try {
-        applyCatalog(await api.bandoriScan(sessionId, file.bytes));
+        applyCatalog(await api.bandoriScan(sessionId, await file.read()));
       } catch (e) {
-        toast(`${file.name}: ${e}`, "error");
+        // un-pulled LFS pointer stubs and stray files land here
+        if (quietErrors) skipped++;
+        else toast(`${file.name}: ${e}`, "error");
       }
       renderTable();
     }
     busy = false;
     addBtn.disabled = false;
+    addDirBtn.disabled = false;
     importBtn.disabled = !rows.length;
-    statusLine.textContent = `${rows.length} songs found. Fetching titles from bestdori…`;
+    const skipNote = skipped ? ` (${skipped} files skipped — not usable bundles)` : "";
+    statusLine.textContent = `${rows.length} songs found${skipNote}. Fetching titles from bestdori…`;
     try {
       const meta = await api.bandoriMeta(sessionId);
       for (const row of rows) {
@@ -133,11 +149,32 @@ export function openBandoriBatchDialog(onDone: () => void): void {
           row.band = m.band;
         }
       }
-      statusLine.textContent = `${rows.length} songs found.`;
+      statusLine.textContent = `${rows.length} songs found${skipNote}.`;
     } catch (e) {
-      statusLine.textContent = `${rows.length} songs found (bestdori titles unavailable: ${e})`;
+      statusLine.textContent = `${rows.length} songs found${skipNote} (bestdori titles unavailable: ${e})`;
     }
     renderTable();
+  }
+
+  async function addBundles(): Promise<void> {
+    const files = await pickFiles(".bundle,.unity3d,*");
+    if (!files.length) return;
+    await scanAll(
+      files.map((f) => ({ name: f.name, read: () => Promise.resolve(f.bytes) })),
+      false,
+    );
+  }
+
+  async function addFolder(): Promise<void> {
+    const all = await pickDirFiles();
+    if (!all.length) return;
+    const matches = all.filter((f) => BUNDLE_NAME.test(f.name));
+    if (!matches.length) {
+      toast("No musicscore/bgm/musicjacket bundles found in that folder", "error");
+      return;
+    }
+    statusLine.textContent = `Found ${matches.length} bundles in the folder (of ${all.length} files).`;
+    await scanAll(matches, true);
   }
 
   async function doImport(): Promise<void> {
@@ -195,9 +232,9 @@ export function openBandoriBatchDialog(onDone: () => void): void {
     "Batch import Bandori songs",
     el("p", {
       class: "dialog-body",
-      text: "Add asset bundles from the Bandori data: musicscoreNN (charts), sound/bgmNNN (audio), musicjacketNN (art). Songs are matched across bundles automatically — you can add more bundles at any point before importing.",
+      text: "Point this at the Bandori assets — pick a folder (bundles are auto-detected by name: musicscoreNN charts, bgmNNN audio, musicjacketNN art) or individual files. Songs are matched across bundles automatically; add more at any point before importing.",
     }),
-    el("div", { class: "row", style: "margin:10px 0" }, addBtn, importBtn),
+    el("div", { class: "row", style: "margin:10px 0" }, addDirBtn, addBtn, importBtn),
     statusLine,
     el("div", { style: "max-height:45vh;overflow:auto" }, table),
   );

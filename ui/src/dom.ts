@@ -122,6 +122,25 @@ export function pickFile(accept: string): Promise<{ name: string; bytes: ArrayBu
   });
 }
 
+/** Prompt for a directory; resolves with lazy handles (bytes read on demand)
+ *  so callers can filter by name before touching file contents. */
+export function pickDirFiles(): Promise<{ name: string; path: string; read: () => Promise<ArrayBuffer> }[]> {
+  return new Promise((resolve) => {
+    const input = el("input", { type: "file", webkitdirectory: true });
+    input.addEventListener("change", () => {
+      resolve(
+        [...(input.files ?? [])].map((file) => ({
+          name: file.name,
+          path: (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? file.name,
+          read: () => file.arrayBuffer(),
+        })),
+      );
+    });
+    input.addEventListener("cancel", () => resolve([]));
+    input.click();
+  });
+}
+
 /** Prompt for multiple files; resolves with an empty array if cancelled. */
 export function pickFiles(accept: string): Promise<{ name: string; bytes: ArrayBuffer }[]> {
   return new Promise((resolve) => {
