@@ -2,6 +2,7 @@
 
 mod audio;
 mod audio_native;
+mod bandori_batch;
 mod bundle;
 mod projects;
 mod server;
@@ -29,6 +30,7 @@ fn main() {
     tauri::Builder::default()
         .manage(server::ServerState::new())
         .manage(audio_native::NativeAudio::new())
+        .manage(bandori_batch::BandoriBatch::default())
         .setup(|app| {
             let state = app.state::<server::ServerState>();
             server::load_saved_session(app.handle(), &state);
@@ -64,6 +66,11 @@ fn main() {
             audio_native::native_pause,
             audio_native::native_position,
             audio_native::native_set_ticks,
+            bandori_batch::bandori_scan,
+            bandori_batch::bandori_chart,
+            bandori_batch::bandori_meta,
+            bandori_batch::bandori_import_song,
+            bandori_batch::bandori_close,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

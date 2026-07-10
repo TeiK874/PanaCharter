@@ -24,22 +24,22 @@ pub struct ChartCandidate {
 // byte cursor
 // ---------------------------------------------------------------------------
 
-struct Cur<'a> {
+pub(crate) struct Cur<'a> {
     b: &'a [u8],
     p: usize,
 }
 
-type R<T> = Result<T, String>;
+pub(crate) type R<T> = Result<T, String>;
 
-fn eof() -> String {
+pub(crate) fn eof() -> String {
     "Unexpected end of bundle data".into()
 }
 
 impl<'a> Cur<'a> {
-    fn new(b: &'a [u8]) -> Self {
+    pub(crate) fn new(b: &'a [u8]) -> Self {
         Self { b, p: 0 }
     }
-    fn take(&mut self, n: usize) -> R<&'a [u8]> {
+    pub(crate) fn take(&mut self, n: usize) -> R<&'a [u8]> {
         let end = self.p.checked_add(n).ok_or_else(eof)?;
         if end > self.b.len() {
             return Err(eof());
@@ -48,40 +48,40 @@ impl<'a> Cur<'a> {
         self.p = end;
         Ok(s)
     }
-    fn skip(&mut self, n: usize) -> R<()> {
+    pub(crate) fn skip(&mut self, n: usize) -> R<()> {
         self.take(n).map(|_| ())
     }
-    fn align(&mut self, n: usize) {
+    pub(crate) fn align(&mut self, n: usize) {
         let rem = self.p % n;
         if rem != 0 {
             self.p += n - rem;
         }
     }
-    fn u8(&mut self) -> R<u8> {
+    pub(crate) fn u8(&mut self) -> R<u8> {
         Ok(self.take(1)?[0])
     }
-    fn u16(&mut self, be: bool) -> R<u16> {
+    pub(crate) fn u16(&mut self, be: bool) -> R<u16> {
         let s: [u8; 2] = self.take(2)?.try_into().unwrap();
         Ok(if be { u16::from_be_bytes(s) } else { u16::from_le_bytes(s) })
     }
-    fn u32(&mut self, be: bool) -> R<u32> {
+    pub(crate) fn u32(&mut self, be: bool) -> R<u32> {
         let s: [u8; 4] = self.take(4)?.try_into().unwrap();
         Ok(if be { u32::from_be_bytes(s) } else { u32::from_le_bytes(s) })
     }
-    fn i32(&mut self, be: bool) -> R<i32> {
+    pub(crate) fn i32(&mut self, be: bool) -> R<i32> {
         Ok(self.u32(be)? as i32)
     }
-    fn u64(&mut self, be: bool) -> R<u64> {
+    pub(crate) fn u64(&mut self, be: bool) -> R<u64> {
         let s: [u8; 8] = self.take(8)?.try_into().unwrap();
         Ok(if be { u64::from_be_bytes(s) } else { u64::from_le_bytes(s) })
     }
-    fn i64(&mut self, be: bool) -> R<i64> {
+    pub(crate) fn i64(&mut self, be: bool) -> R<i64> {
         Ok(self.u64(be)? as i64)
     }
-    fn f32(&mut self, be: bool) -> R<f32> {
+    pub(crate) fn f32(&mut self, be: bool) -> R<f32> {
         Ok(f32::from_bits(self.u32(be)?))
     }
-    fn cstr(&mut self) -> R<String> {
+    pub(crate) fn cstr(&mut self) -> R<String> {
         let start = self.p;
         while self.p < self.b.len() && self.b[self.p] != 0 {
             self.p += 1;
@@ -94,7 +94,7 @@ impl<'a> Cur<'a> {
         Ok(s)
     }
     /// Unity serialized string: u32 length + bytes, aligned to 4.
-    fn ustring(&mut self, be: bool) -> R<String> {
+    pub(crate) fn ustring(&mut self, be: bool) -> R<String> {
         let len = self.u32(be)? as usize;
         if len > 0x0100_0000 {
             return Err("Implausible string length".into());
@@ -142,7 +142,7 @@ struct Node {
 }
 
 /// Parse a UnityFS bundle into its contained files.
-fn read_unityfs(bytes: &[u8]) -> R<Vec<(String, Vec<u8>)>> {
+pub(crate) fn read_unityfs(bytes: &[u8]) -> R<Vec<(String, Vec<u8>)>> {
     let mut c = Cur::new(bytes);
     if c.take(8)? != b"UnityFS\0" {
         return Err("Not a UnityFS bundle".into());
@@ -221,10 +221,11 @@ fn read_unityfs(bytes: &[u8]) -> R<Vec<(String, Vec<u8>)>> {
 // SerializedFile
 // ---------------------------------------------------------------------------
 
-struct ObjectInfo {
-    class_id: i32,
-    byte_start: u64,
-    byte_size: u32,
+pub(crate) struct ObjectInfo {
+    pub(crate) path_id: i64,
+    pub(crate) class_id: i32,
+    pub(crate) byte_start: u64,
+    pub(crate) byte_size: u32,
 }
 
 /// Skip one SerializedType record, returning nothing — we only need class ids.
@@ -262,7 +263,7 @@ fn skip_type(c: &mut Cur, version: u32, be: bool, enable_tree: bool, is_ref: boo
     Ok(class_id)
 }
 
-fn read_serialized_file(bytes: &[u8]) -> R<(Vec<ObjectInfo>, u64, bool)> {
+pub(crate) fn read_serialized_file(bytes: &[u8]) -> R<(Vec<ObjectInfo>, u64, bool)> {
     let mut c = Cur::new(bytes);
     let _metadata_size = c.u32(true)?;
     let _file_size = c.u32(true)?;
@@ -301,12 +302,13 @@ fn read_serialized_file(bytes: &[u8]) -> R<(Vec<ObjectInfo>, u64, bool)> {
     let mut objects = Vec::with_capacity(object_count);
     for _ in 0..object_count {
         c.align(4);
-        let _path_id = c.i64(be)?;
+        let path_id = c.i64(be)?;
         let byte_start = if version >= 22 { c.u64(be)? } else { c.u32(be)? as u64 };
         let byte_size = c.u32(be)?;
         let type_index = c.u32(be)? as usize;
         let class_id = *class_ids.get(type_index).ok_or("Bad type index")?;
         objects.push(ObjectInfo {
+            path_id,
             class_id,
             byte_start,
             byte_size,
@@ -331,7 +333,7 @@ fn looks_textual(s: &str) -> bool {
     total > 0 && bad * 20 < total // < 5% control/replacement chars
 }
 
-fn parse_text_asset(data: &[u8], be: bool) -> R<(String, String)> {
+pub(crate) fn parse_text_asset(data: &[u8], be: bool) -> R<(String, String)> {
     let mut c = Cur::new(data);
     let name = c.ustring(be)?;
     let len = c.u32(be)? as usize;
@@ -478,6 +480,51 @@ pub fn bundle_extract_charts(
 
 #[cfg(test)]
 mod tests {
+    /// Temporary investigation helper:
+    /// CHARTER_INVESTIGATE=/path/bundle CHARTER_DUMP_DIR=/tmp cargo test investigate -- --nocapture
+    #[test]
+    fn investigate() {
+        let Ok(path) = std::env::var("CHARTER_INVESTIGATE") else {
+            return;
+        };
+        let dump = std::env::var("CHARTER_DUMP_DIR").ok();
+        let bytes = std::fs::read(path).unwrap();
+        let files = super::read_unityfs(&bytes).unwrap();
+        for (p, content) in files {
+            println!("node {} ({} bytes)", p, content.len());
+            if p.ends_with(".resS") {
+                if let Some(d) = &dump {
+                    std::fs::write(format!("{d}/resS.bin"), &content).unwrap();
+                }
+                continue;
+            }
+            let Ok((objs, off, be)) = super::read_serialized_file(&content) else {
+                println!("  (not a serialized file)");
+                continue;
+            };
+            for o in objs {
+                let start = off as usize + o.byte_start as usize;
+                let data = &content[start..start + o.byte_size as usize];
+                println!("  class {} size {}", o.class_id, o.byte_size);
+                if o.class_id == 49 {
+                    let mut c = super::Cur::new(data);
+                    if let (Ok(name), Ok(len)) = (c.ustring(be), c.u32(be)) {
+                        println!("    TextAsset '{}' body {} bytes", name, len);
+                        if let (Some(d), Ok(body)) = (&dump, c.take(len as usize)) {
+                            std::fs::write(format!("{d}/{name}.bin"), body).unwrap();
+                        }
+                    }
+                } else if o.class_id == 28 || o.class_id == 142 {
+                    println!("    head: {:02x?}", &data[..data.len().min(120)]);
+                    if let Some(d) = &dump {
+                        std::fs::write(format!("{d}/class{}_{}.bin", o.class_id, o.byte_start), data)
+                            .unwrap();
+                    }
+                }
+            }
+        }
+    }
+
     /// Run manually: CHARTER_TEST_BUNDLE=/path/to/bundle cargo test bundle -- --nocapture
     #[test]
     fn extract_from_env_bundle() {

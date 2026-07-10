@@ -2,6 +2,7 @@ import * as api from "../api.js";
 import { attempt, confirmDialog, el, openDialog, pickFile, toast } from "../dom.js";
 import type { CatalogSong, ProjectSummary } from "../types.js";
 import { ATTRIBUTES, DIFFICULTIES } from "../types.js";
+import { openBandoriBatchDialog } from "./bandori.js";
 
 export interface LibraryCtx {
   openEditor: (projectId: string) => void;
@@ -91,11 +92,17 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
           await renderTab();
         }),
     });
+    const bandoriBtn = el("button", {
+      class: "btn",
+      text: "Batch import Bandori…",
+      title: "Import whole songs (charts + audio + jackets) from Bandori asset bundles",
+      onclick: () => openBandoriBatchDialog(() => void renderTab()),
+    });
 
     return el(
       "div",
       {},
-      el("div", { class: "row", style: "margin-bottom:14px" }, newBtn, importBtn),
+      el("div", { class: "row", style: "margin-bottom:14px" }, newBtn, importBtn, bandoriBtn),
       projects.length
         ? grid
         : el("p", {

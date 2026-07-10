@@ -83,6 +83,48 @@ export interface ChartCandidate {
 export const bundleExtractCharts = (bytes: ArrayBuffer) =>
   invokeBinary<ChartCandidate[]>("bundle_extract_charts", bytes);
 
+// --- Bandori batch import ----------------------------------------------------
+
+export interface BandoriSongEntry {
+  stem: string;
+  difficulties: string[];
+  bgm_id: string | null;
+  has_audio: boolean;
+  has_jacket: boolean;
+}
+export interface BandoriCatalog {
+  songs: BandoriSongEntry[];
+  loose_bgm: number;
+  loose_jackets: number;
+}
+export const bandoriScan = (sessionId: string, bytes: ArrayBuffer) =>
+  invokeBinary<BandoriCatalog>("bandori_scan", bytes, { "x-session-id": sessionId });
+export const bandoriChart = (sessionId: string, stem: string, difficulty: string) =>
+  invoke<string>("bandori_chart", { sessionId, stem, difficulty });
+export const bandoriMeta = (sessionId: string) =>
+  invoke<Record<string, { title: string | null; band: string | null }>>("bandori_meta", {
+    sessionId,
+  });
+export const bandoriImportSong = (
+  sessionId: string,
+  stem: string,
+  name: string,
+  artist: string,
+  bpm: number | null,
+  levels: Record<number, number>,
+  charts: Record<number, SifNote[]>,
+) =>
+  invoke<{ summary: ProjectSummary; audio: string }>("bandori_import_song", {
+    sessionId,
+    stem,
+    name,
+    artist,
+    bpm,
+    levels,
+    charts,
+  });
+export const bandoriClose = (sessionId: string) => invoke<void>("bandori_close", { sessionId });
+
 // --- native audio engine (Linux PulseAudio; absent elsewhere) ---------------
 
 export const nativeAvailable = () => invoke<boolean>("native_available");

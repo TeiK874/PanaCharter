@@ -28,6 +28,12 @@ scores; unchanged audio/jackets are not re-sent.
   `.unity3d`/musicscore bundle and it extracts TextAsset charts (Bandori) and
   `Aoharu.NoteData` MonoBehaviours (SIF2) directly, with a picker when a bundle
   holds several difficulties.
+- `src-tauri/src/bandori_batch.rs` — **batch import** ("Batch import Bandori…" in
+  Projects): feed it any mix of Bandori `musicscoreNN` (charts), `sound/bgmNNN`
+  (audio as split CRI ACB → HCA → decoded via system `ffmpeg`, optional) and
+  `musicjacketNN` bundles (ASTC textures → PNG); songs are grouped automatically,
+  titles/bands come from the bestdori API (cached), and each selected song becomes
+  a ready-to-edit project. Rules match `bandori-sif2-tools`.
 
 ## Dependencies
 

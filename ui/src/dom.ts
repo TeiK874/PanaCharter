@@ -122,6 +122,23 @@ export function pickFile(accept: string): Promise<{ name: string; bytes: ArrayBu
   });
 }
 
+/** Prompt for multiple files; resolves with an empty array if cancelled. */
+export function pickFiles(accept: string): Promise<{ name: string; bytes: ArrayBuffer }[]> {
+  return new Promise((resolve) => {
+    const input = el("input", { type: "file", accept, multiple: true });
+    input.addEventListener("change", async () => {
+      const files = [...(input.files ?? [])];
+      const out = [];
+      for (const file of files) {
+        out.push({ name: file.name, bytes: await file.arrayBuffer() });
+      }
+      resolve(out);
+    });
+    input.addEventListener("cancel", () => resolve([]));
+    input.click();
+  });
+}
+
 export function fmtTime(sec: number): string {
   const s = Math.max(0, sec);
   const m = Math.floor(s / 60);

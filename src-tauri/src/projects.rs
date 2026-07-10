@@ -646,6 +646,43 @@ pub fn project_import_zip(
     import_zip_bytes(&app, bytes.clone())
 }
 
+/// Create a project directory from parts already in memory (used by the
+/// Bandori batch importer). Chart notes are written as SIF1 JSON like save.
+pub(crate) fn create_project_files(
+    app: &AppHandle,
+    manifest: &Manifest,
+    charts: &BTreeMap<u32, Vec<SifNote>>,
+    jacket_png: Option<&[u8]>,
+    audio: Option<(&str, &[u8])>,
+) -> Result<ProjectSummary, String> {
+    let id = new_id();
+    let dir = projects_dir(app)?.join(&id);
+    fs::create_dir_all(&dir).map_err(es)?;
+    fs::write(
+        dir.join("manifest.json"),
+        serde_json::to_vec_pretty(manifest).map_err(es)?,
+    )
+    .map_err(es)?;
+    fs::write(
+        dir.join("editor.json"),
+        serde_json::to_vec_pretty(&EditorMeta::default()).map_err(es)?,
+    )
+    .map_err(es)?;
+    for (level, notes) in charts {
+        if (1..=4).contains(level) && !notes.is_empty() {
+            fs::write(chart_path(&dir, *level), serde_json::to_vec(notes).map_err(es)?)
+                .map_err(es)?;
+        }
+    }
+    if let Some(png) = jacket_png {
+        fs::write(dir.join("jacket.png"), png).map_err(es)?;
+    }
+    if let Some((ext, bytes)) = audio {
+        fs::write(dir.join(format!("audio.{ext}")), bytes).map_err(es)?;
+    }
+    summarize(&id, &dir).ok_or_else(|| "Failed to create project".into())
+}
+
 pub struct UploadBundle {
     pub manifest: Manifest,
     /// (level, level_number, chart json bytes)
