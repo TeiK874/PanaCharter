@@ -73,6 +73,18 @@ async function goEditor(projectId: string): Promise<void> {
   }
 }
 
+// --- session expiry ---------------------------------------------------------------
+
+let lastExpiryToast = 0;
+window.addEventListener("charter-auth-expired", () => {
+  void refreshTopbar();
+  const now = Date.now();
+  if (now - lastExpiryToast > 8000) {
+    lastExpiryToast = now;
+    toast("Your server session expired — log in again from the server panel (top right)", "error");
+  }
+});
+
 // --- boot ------------------------------------------------------------------------
 
 app.append(topbar, viewHost);
@@ -82,4 +94,9 @@ void (async () => {
   const session = await api.sessionInfo();
   if (session.server) await goLibrary();
   else await goConnect();
+  // A stored token may have died since last launch (24h expiry, single-session
+  // kick). Probe once so the top bar tells the truth from the start.
+  if (session.logged_in) {
+    void api.listMine().catch(() => {});
+  }
 })();

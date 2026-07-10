@@ -103,6 +103,19 @@ async fn parse_mgmt(resp: reqwest::Response) -> Result<Value, String> {
     check_envelope(v)
 }
 
+/// The server said our token is dead (24h expiry, or a webui login elsewhere
+/// kicked it — sessions are single-use). Drop the stored token so the UI
+/// reflects reality instead of a green dot on a corpse.
+fn drop_dead_token(app: &AppHandle, state: &ServerState, err: String) -> String {
+    if err == "Not logged in" {
+        let mut sess = state.session.lock().unwrap();
+        if sess.token.take().is_some() {
+            persist(app, &sess);
+        }
+    }
+    err
+}
+
 /// Connect to a server: normalize the URL, probe `/api/webui/serverInfo`, persist.
 #[tauri::command]
 pub async fn connect(
@@ -199,7 +212,7 @@ pub fn session_info(state: State<'_, ServerState>) -> Value {
 
 /// `GET /custom_song/mine` — songs owned by the logged-in user.
 #[tauri::command]
-pub async fn list_mine(state: State<'_, ServerState>) -> Result<Value, String> {
+pub async fn list_mine(app: AppHandle, state: State<'_, ServerState>) -> Result<Value, String> {
     let base = base_url(&state)?;
     let cookie = cookie_header(&state)?;
     let resp = state
@@ -209,25 +222,26 @@ pub async fn list_mine(state: State<'_, ServerState>) -> Result<Value, String> {
         .send()
         .await
         .map_err(net_err)?;
-    let v = parse_mgmt(resp).await?;
+    let v = parse_mgmt(resp).await.map_err(|e| drop_dead_token(&app, &state, e))?;
     Ok(v.get("songs").cloned().unwrap_or_else(|| json!([])))
 }
 
 /// `GET /custom_song/browse` — public catalog (plus own/shared songs when logged in).
 #[tauri::command]
-pub async fn browse_songs(state: State<'_, ServerState>) -> Result<Value, String> {
+pub async fn browse_songs(app: AppHandle, state: State<'_, ServerState>) -> Result<Value, String> {
     let base = base_url(&state)?;
     let mut req = state.client.get(format!("{base}/custom_song/browse"));
     if let Ok(cookie) = cookie_header(&state) {
         req = req.header("cookie", cookie);
     }
     let resp = req.send().await.map_err(net_err)?;
-    let v = parse_mgmt(resp).await?;
+    let v = parse_mgmt(resp).await.map_err(|e| drop_dead_token(&app, &state, e))?;
     Ok(v.get("songs").cloned().unwrap_or_else(|| json!([])))
 }
 
 #[tauri::command]
 pub async fn set_visibility(
+    app: AppHandle,
     state: State<'_, ServerState>,
     music_id: u64,
     visibility: String,
@@ -252,12 +266,18 @@ pub async fn set_visibility(
         .send()
         .await
         .map_err(net_err)?;
-    parse_mgmt(resp).await?;
+    parse_mgmt(resp)
+        .await
+        .map_err(|e| drop_dead_token(&app, &state, e))?;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn delete_song(state: State<'_, ServerState>, music_id: u64) -> Result<(), String> {
+pub async fn delete_song(
+    app: AppHandle,
+    state: State<'_, ServerState>,
+    music_id: u64,
+) -> Result<(), String> {
     let base = base_url(&state)?;
     let cookie = cookie_header(&state)?;
     let resp = state
@@ -268,7 +288,9 @@ pub async fn delete_song(state: State<'_, ServerState>, music_id: u64) -> Result
         .send()
         .await
         .map_err(net_err)?;
-    parse_mgmt(resp).await?;
+    parse_mgmt(resp)
+        .await
+        .map_err(|e| drop_dead_token(&app, &state, e))?;
     Ok(())
 }
 
@@ -373,7 +395,7 @@ pub async fn upload_project(
         .send()
         .await
         .map_err(net_err)?;
-    let v = parse_mgmt(resp).await?;
+    let v = parse_mgmt(resp).await.map_err(|e| drop_dead_token(&app, &state, e))?;
     let music_id = v
         .get("music_id")
         .and_then(|m| m.as_u64())
@@ -448,7 +470,7 @@ pub async fn update_project(
         .send()
         .await
         .map_err(net_err)?;
-    let v = parse_mgmt(resp).await?;
+    let v = parse_mgmt(resp).await.map_err(|e| drop_dead_token(&app, &state, e))?;
     let music_id = v
         .get("music_id")
         .and_then(|m| m.as_u64())
