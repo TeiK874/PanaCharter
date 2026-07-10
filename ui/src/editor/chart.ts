@@ -136,15 +136,22 @@ export class ChartDoc {
     for (const id of gone) this.selection.delete(id);
   }
 
-  /** After moving notes, drop any unmoved note now exactly under a moved one. */
+  /** After moving notes, drop any note now exactly under a moved one —
+   *  unmoved notes under the selection, and later-moved over earlier-moved
+   *  (two selected notes can land on the same slot when snapping compresses). */
   resolveCollisions(movedIds: Set<number>): void {
-    const doomed: number[] = [];
+    const doomed = new Set<number>();
+    const taken = new Map<string, number>(); // "t/lane" -> moved note id
     for (const moved of this.notes) {
       if (!movedIds.has(moved.id)) continue;
       const clash = this.noteAt(moved.t, moved.lane, movedIds);
-      if (clash) doomed.push(clash.id);
+      if (clash) doomed.add(clash.id);
+      const key = `${moved.t}/${moved.lane}`;
+      const prev = taken.get(key);
+      if (prev !== undefined) doomed.add(moved.id);
+      else taken.set(key, moved.id);
     }
-    if (doomed.length) this.remove(doomed);
+    if (doomed.size) this.remove(doomed);
   }
 
   selectedNotes(): Note[] {
@@ -175,24 +182,42 @@ export class ChartDoc {
       laneList.push(n);
     }
     // overlaps within a lane: inside a hold's body is unplayable, and a note
-    // stacked exactly on a hold's tail crashes the SIF2 runtime (NRE)
+    // stacked exactly on a hold's tail crashes the SIF2 runtime (NRE).
+    // Scan every later note under each hold, not just the immediate neighbor.
     for (const [lane, list] of byLane) {
-      for (let i = 0; i < list.length - 1; i++) {
+      for (let i = 0; i < list.length; i++) {
         const cur = list[i];
         if (cur.kind !== "hold") continue;
-        const next = list[i + 1];
         const end = cur.t + cur.dur;
-        if (next.t < end - EPS) {
+        for (let j = i + 1; j < list.length && list[j].t < end + EPS; j++) {
+          const next = list[j];
+          if (next.t < end - EPS) {
+            out.push({
+              message: `Lane ${lane}: note at ${next.t.toFixed(3)}s lands inside the hold starting at ${cur.t.toFixed(3)}s`,
+              severity: "warning",
+              noteId: next.id,
+            });
+          } else {
+            out.push({
+              message: `Lane ${lane}: note at ${next.t.toFixed(3)}s sits exactly on a hold's tail — this crashes the game; leave a gap`,
+              severity: "error",
+              noteId: next.id,
+            });
+          }
+        }
+      }
+      // duplicates on the exact same time+lane: different kinds are rejected
+      // by the server, same kinds become two stacked in-game notes
+      for (let i = 0; i < list.length - 1; i++) {
+        const a = list[i];
+        const b = list[i + 1];
+        if (Math.abs(a.t - b.t) < EPS) {
           out.push({
-            message: `Lane ${lane}: note at ${next.t.toFixed(3)}s lands inside the hold starting at ${cur.t.toFixed(3)}s`,
-            severity: "warning",
-            noteId: next.id,
-          });
-        } else if (next.t < end + EPS) {
-          out.push({
-            message: `Lane ${lane}: note at ${next.t.toFixed(3)}s sits exactly on a hold's tail — this crashes the game; leave a gap`,
-            severity: "error",
-            noteId: next.id,
+            message: `Lane ${lane}: two notes share the exact time ${a.t.toFixed(3)}s${
+              a.kind !== b.kind ? " with different kinds — the server rejects this" : " (stacked notes)"
+            }`,
+            severity: a.kind !== b.kind ? "error" : "warning",
+            noteId: b.id,
           });
         }
       }

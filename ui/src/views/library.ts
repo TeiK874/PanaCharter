@@ -4,6 +4,18 @@ import type { CatalogSong, ProjectSummary } from "../types.js";
 import { ATTRIBUTES, DIFFICULTIES } from "../types.js";
 import { openBandoriBatchDialog } from "./bandori.js";
 
+/** Wrap an async button action so re-clicks are ignored while it runs. */
+function oneShot(fn: (btn: HTMLButtonElement) => Promise<void>): (e: Event) => void {
+  return (e: Event) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    if (btn.disabled) return;
+    btn.disabled = true;
+    void fn(btn).finally(() => {
+      btn.disabled = false;
+    });
+  };
+}
+
 export interface LibraryCtx {
   openEditor: (projectId: string) => void;
 }
@@ -20,6 +32,7 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
 
   const content = el("div", {});
   let activeTab: TabName = "local";
+  let renderGen = 0;
 
   const tabs: Record<TabName, HTMLButtonElement> = {
     local: el("button", { class: "tab", text: "Projects", onclick: () => switchTab("local") }),
@@ -36,14 +49,21 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
   }
 
   async function renderTab(): Promise<void> {
+    const gen = ++renderGen; // a newer render (tab switch) wins
     content.replaceChildren(el("p", { class: "empty-note", text: "Loading…" }));
+    let rendered: HTMLElement;
     try {
-      if (activeTab === "local") content.replaceChildren(await renderLocal());
-      else if (activeTab === "mine") content.replaceChildren(await renderMine());
-      else content.replaceChildren(await renderBrowse());
+      if (activeTab === "local") rendered = await renderLocal();
+      else if (activeTab === "mine") rendered = await renderMine();
+      else rendered = await renderBrowse();
     } catch (e) {
-      content.replaceChildren(el("p", { class: "empty-note", text: String(e) }));
+      let message = String(e);
+      if (message.includes("Not connected to a server")) {
+        message = "Connect to a server first — click the server button in the top right.";
+      }
+      rendered = el("p", { class: "empty-note", text: message });
     }
+    if (gen === renderGen) content.replaceChildren(rendered);
   }
 
   function jacketEl(load: () => Promise<ArrayBuffer>): HTMLElement {
@@ -176,8 +196,8 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
         el("button", {
           class: "btn btn-primary",
           text: "Create & open",
-          onclick: () =>
-            void attempt(async () => {
+          onclick: oneShot(async () => {
+            await attempt(async () => {
               if (!nameInput.value.trim() || !artistInput.value.trim()) {
                 toast("Title and artist are required (the server insists too)", "error");
                 return;
@@ -185,7 +205,8 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
               const summary = await api.projectCreate(nameInput.value.trim(), artistInput.value.trim());
               dlg.close();
               ctx.openEditor(summary.id);
-            }),
+            });
+          }),
         }),
       ),
     );
@@ -264,13 +285,11 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
             text: "Apply",
             onclick: () =>
               void attempt(async () => {
-                const ids = sharedInput.value
-                  .split(/[\s,]+/)
-                  .filter(Boolean)
-                  .map(Number);
-                if (ids.some((n) => !Number.isInteger(n) || n < 0)) {
-                  throw "Shared list must be numeric user IDs";
+                const parts = sharedInput.value.split(/[\s,]+/).filter(Boolean);
+                if (parts.some((p) => !/^\d{1,15}$/.test(p))) {
+                  throw "Shared list must be numeric user IDs (up to 15 digits)";
                 }
+                const ids = parts.map(Number);
                 await api.setVisibility(
                   song.music_id,
                   visSelect.value,
@@ -288,11 +307,12 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
             class: "btn",
             text: "Download to projects",
             title: "Fetch the original chart/audio/jacket into a local project",
-            onclick: () =>
-              void attempt(async () => {
+            onclick: oneShot(async () => {
+              await attempt(async () => {
                 const summary = await api.downloadSongToProject(song.music_id);
                 toast(`Downloaded into local project "${summary.name}"`, "ok");
-              }),
+              });
+            }),
           }),
           el("button", {
             class: "btn btn-danger",
@@ -350,13 +370,17 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
               { class: "actions" },
               el("button", {
                 class: "btn",
-                text: song.downloads_disabled ? "Downloads disabled" : "Download to projects",
+                text:
+                  song.downloads_disabled && !song.mine
+                    ? "Downloads disabled"
+                    : "Download to projects",
                 disabled: song.downloads_disabled && !song.mine,
-                onclick: () =>
-                  void attempt(async () => {
+                onclick: oneShot(async () => {
+                  await attempt(async () => {
                     const summary = await api.downloadSongToProject(song.music_id);
                     toast(`Downloaded into local project "${summary.name}" — see Projects`, "ok");
-                  }),
+                  });
+                }),
               }),
             ),
           ),

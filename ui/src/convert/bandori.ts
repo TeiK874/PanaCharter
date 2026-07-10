@@ -14,7 +14,7 @@
 //   boundary-stacked notes NRE the SIF2 runtime.
 
 import type { ChartConverter, ImportedChart } from "./index.js";
-import { makeBeatClock, makeNote } from "./index.js";
+import { dropTailStacks, makeBeatClock, makeNote } from "./util.js";
 
 // channel%10 (BMS lane 1–6,8) → SIF position 1–9 (1 = rightmost).
 // Display left→right is ch 16,11,12,13,14,15,18 → positions 8..2 — bandori's
@@ -125,8 +125,16 @@ export const bandoriNoteConverter: ChartConverter = {
       warnings.push(`Audio starts ${anchor.toFixed(3)}s into the score — note times were shifted to match the track.`);
     }
 
+    // BMS channels we can't honor shift all later timing — warn, don't guess
+    if (channels.some((c) => c.channel === "08" || c.channel === "09")) {
+      warnings.push(
+        "This chart uses extended-BPM/stop events (BMS channels 08/09) which are not supported — note timing may be wrong.",
+      );
+    }
+
     // main + LN layers
     const events: Ev[] = [];
+    let undefinedSlots = 0;
     const lnByLane = new Map<number, number[]>(); // lane -> sorted times
     for (const c of channels) {
       const layer = Number(c.channel[0]);
@@ -139,7 +147,11 @@ export const bandoriNoteConverter: ChartConverter = {
           if (!list) lnByLane.set(laneRaw, (list = []));
           list.push(t);
         } else {
-          const wav = wavMap.get(s.slot) ?? "";
+          const wav = wavMap.get(s.slot);
+          if (wav === undefined) {
+            undefinedSlots++;
+            continue;
+          }
           const action = classifyWav(wav);
           if (action !== "skip") events.push({ t, lane: laneRaw, action, wav });
         }
@@ -240,6 +252,13 @@ export const bandoriNoteConverter: ChartConverter = {
       }
     }
 
+    const tailStacks = dropTailStacks(notes);
+    if (tailStacks)
+      warnings.push(
+        `${tailStacks} notes sat exactly on a same-lane hold tail (crashes the game) and were dropped.`,
+      );
+    if (undefinedSlots)
+      warnings.push(`${undefinedSlots} note slots referenced undefined #WAV entries and were skipped.`);
     if (flicks) warnings.push(`${flicks} flicks became plain taps/hold-ends — SIF2 has no flick gesture.`);
     if (zigzags) warnings.push(`${zigzags} lane-changing slides were flattened to a hold on their starting lane.`);
     if (midClicks) warnings.push(`${midClicks} mid-slide clicks were merged into their hold (the upload format only supports simple holds).`);

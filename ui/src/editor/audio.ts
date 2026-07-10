@@ -40,6 +40,7 @@ export class Player {
   private startCtxTime = 0;
   private tickIdx = 0;
   private tickTimer: number | null = null;
+  private lastTickTime = -Infinity;
   private playGen = 0;
 
   // --- native backend ---
@@ -77,10 +78,14 @@ export class Player {
 
   loadPcm(raw: ArrayBuffer): void {
     this.hardStop();
+    if (raw.byteLength < 12) throw "Corrupt PCM payload";
     const view = new DataView(raw);
     const rate = view.getUint32(0, true);
     const channels = view.getUint32(4, true);
     const frames = view.getUint32(8, true);
+    if (!rate || !channels || channels > 8 || 12 + frames * channels * 2 > raw.byteLength) {
+      throw "Corrupt PCM payload (bad header)";
+    }
     const samples = new Int16Array(raw, 12, frames * channels);
     this.durationSec = frames / rate;
     this.computePeaks(samples, channels, rate);
@@ -146,7 +151,8 @@ export class Player {
     if (this.native) {
       void this.queued(() => api.nativeSetTicks(times, this.ticksEnabled)).catch(() => {});
     } else if (this.playing) {
-      this.tickIdx = lowerBound(times, this.time + 1e-6);
+      // don't re-schedule notes already inside the lookahead window (double tick)
+      this.tickIdx = lowerBound(times, Math.max(this.time, this.lastTickTime) + 1e-6);
     }
   }
 
@@ -166,10 +172,14 @@ export class Player {
       this.anchorPos = this.startPos;
       this.anchorAt = performance.now();
       const from = this.startPos;
+      const epoch = this.posEpoch;
       void this.queued(() => api.nativePlay(from, this.rate)).catch((e) => {
-        this.playing = false;
-        this.stopPoll();
-        this.onstate();
+        // only kill playback state if no newer play/seek superseded this one
+        if (epoch === this.posEpoch) {
+          this.playing = false;
+          this.stopPoll();
+          this.onstate();
+        }
         console.error("native play failed:", e);
       });
       this.startPoll();
@@ -206,6 +216,7 @@ export class Player {
     this.startCtxTime = ctx.currentTime + 0.02;
     src.start(this.startCtxTime, this.startPos);
     this.src = src;
+    this.lastTickTime = -Infinity;
     this.tickIdx = lowerBound(this.noteTimes, this.startPos + 1e-6);
     this.tickTimer = window.setInterval(() => this.scheduleTicks(), TICK_INTERVAL_MS);
     this.scheduleTicks();
@@ -318,6 +329,7 @@ export class Player {
   }
 
   private async poll(): Promise<void> {
+    const epoch = this.posEpoch;
     let p: { raw: number; display: number; playing: boolean };
     try {
       // queued so a poll can never observe state from before a pending play
@@ -325,7 +337,8 @@ export class Player {
     } catch {
       return;
     }
-    if (!this.playing || !this.native) return;
+    // a seek/play/pause since this poll started makes its data stale
+    if (!this.playing || !this.native || epoch !== this.posEpoch) return;
     this.anchorPos = p.raw;
     this.anchorAt = performance.now();
     this.nativeLatency = Math.max(0, p.raw - p.display);
@@ -377,6 +390,7 @@ export class Player {
     const horizon = this.time + TICK_LOOKAHEAD * this.rate;
     while (this.tickIdx < this.noteTimes.length && this.noteTimes[this.tickIdx] <= horizon) {
       const t = this.noteTimes[this.tickIdx++];
+      this.lastTickTime = t;
       const when = this.startCtxTime + (t - this.startPos) / this.rate;
       if (when >= this.ctx.currentTime - 0.005) this.tick(when);
     }

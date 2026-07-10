@@ -7,7 +7,7 @@
 // counted and reported as an import warning.
 
 import type { ChartConverter, ImportedChart } from "./index.js";
-import { makeBeatClock, makeNote } from "./index.js";
+import { dropTailStacks, makeBeatClock, makeNote } from "./util.js";
 
 interface BandoriEvent {
   type: string;
@@ -91,7 +91,9 @@ export const bestdoriConverter: ChartConverter = {
         }
         case "Slide":
         case "Long": {
-          const conns = (e.connections ?? []).filter((c) => !c.hidden);
+          const conns = (e.connections ?? [])
+            .filter((c) => !c.hidden && Number.isFinite(c.beat))
+            .sort((a, b) => a.beat - b.beat);
           if (conns.length < 2) {
             skipped++;
             break;
@@ -113,6 +115,11 @@ export const bestdoriConverter: ChartConverter = {
       }
     }
 
+    const tailStacks = dropTailStacks(notes);
+    if (tailStacks)
+      warnings.push(
+        `${tailStacks} notes sat exactly on a same-lane hold tail (crashes the game) and were dropped.`,
+      );
     if (laneChangingSlides)
       warnings.push(
         `${laneChangingSlides} slides change lanes — flattened to a straight hold on their starting lane.`,
@@ -121,8 +128,11 @@ export const bestdoriConverter: ChartConverter = {
     if (flicks) warnings.push(`${flicks} flick notes became plain taps/hold-ends — SIF2 has no flicks.`);
     if (skipped) warnings.push(`${skipped} events were unrecognized or invalid and were skipped.`);
 
-    const bpmEvents = events.filter((e) => e.type === "BPM" && typeof e.bpm === "number");
-    const bpm = bpmEvents.length ? bpmEvents[0].bpm : undefined;
+    const bpmEvents = events
+      .filter((e) => e.type === "BPM" && typeof e.bpm === "number" && e.bpm! > 0)
+      .sort((a, b) => (a.beat ?? 0) - (b.beat ?? 0));
+    if (!bpmEvents.length && notes.length) throw "Chart has no positive BPM event";
+    const bpm = bpmEvents[0]?.bpm;
     if (bpmEvents.length > 1)
       warnings.push(
         `The song changes BPM ${bpmEvents.length - 1} times — note times are correct, but the snap grid only follows the first BPM (${bpm}).`,

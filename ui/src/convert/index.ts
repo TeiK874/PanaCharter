@@ -45,38 +45,4 @@ export function importChart(text: string): ImportedChart & { format: string } {
   throw `Unrecognized chart format. Supported: ${CONVERTERS.map((c) => c.label).join(", ")}`;
 }
 
-/** Shared helper: seconds-at-beat clock from a sorted-or-not list of BPM changes. */
-export function makeBeatClock(
-  changes: { beat: number; bpm: number }[],
-  fallbackBpm = 120,
-): (beat: number) => number {
-  const bpms = [...changes].sort((a, b) => a.beat - b.beat);
-  if (!bpms.length || bpms[0].beat > 0) bpms.unshift({ beat: 0, bpm: bpms[0]?.bpm ?? fallbackBpm });
-  const at: number[] = [0];
-  for (let i = 1; i < bpms.length; i++) {
-    at.push(at[i - 1] + ((bpms[i].beat - bpms[i - 1].beat) * 60) / bpms[i - 1].bpm);
-  }
-  return (beat: number) => {
-    let i = bpms.length - 1;
-    while (i > 0 && bpms[i].beat > beat) i--;
-    return at[i] + ((beat - bpms[i].beat) * 60) / bpms[i].bpm;
-  };
-}
-
-/** Shared helper: clamp/validate a converted note; returns null if unusable. */
-export function makeNote(
-  timing_sec: number,
-  position: number,
-  kind: "tap" | "hold" | "star",
-  dur = 0,
-): SifNote | null {
-  if (!Number.isFinite(timing_sec) || timing_sec < 0) return null;
-  if (!Number.isFinite(position) || position < 1 || position > 9) return null;
-  if (kind === "hold" && !(dur > 0)) kind = "tap";
-  return {
-    timing_sec,
-    position: Math.round(position),
-    effect: kind === "hold" ? 3 : kind === "star" ? 4 : 1,
-    effect_value: kind === "hold" ? dur : 0,
-  };
-}
+export { makeBeatClock, makeNote } from "./util.js";

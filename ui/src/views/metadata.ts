@@ -82,7 +82,13 @@ export function openMetadataDialog(
     ? manifest.band_category
     : "OTHER";
 
-  // jacket preview
+  // jacket preview (object URLs revoked on replace + dialog close)
+  let jacketUrl: string | null = null;
+  const setJacketUrl = (blob: Blob): string => {
+    if (jacketUrl) URL.revokeObjectURL(jacketUrl);
+    jacketUrl = URL.createObjectURL(blob);
+    return jacketUrl;
+  };
   const jacketImg = el("img", { class: "jacket", alt: "Jacket preview" }) as HTMLImageElement;
   const jacketFallback = el("div", { class: "jacket", text: "♪" });
   const jacketBox = el("div", {});
@@ -90,7 +96,7 @@ export function openMetadataDialog(
   void attempt(async () => {
     const bytes = await api.projectGetJacket(projectId).catch(() => null);
     if (bytes) {
-      jacketImg.src = URL.createObjectURL(new Blob([bytes]));
+      jacketImg.src = setJacketUrl(new Blob([bytes]));
       jacketBox.replaceChildren(jacketImg);
     }
   });
@@ -135,7 +141,7 @@ export function openMetadataDialog(
                 const file = await pickFile("image/png,image/jpeg,.png,.jpg,.jpeg");
                 if (!file) return;
                 await api.projectSetJacket(projectId, file.bytes);
-                jacketImg.src = URL.createObjectURL(new Blob([file.bytes]));
+                jacketImg.src = setJacketUrl(new Blob([file.bytes]));
                 jacketBox.replaceChildren(jacketImg);
                 cb.onChanged();
                 toast("Jacket set — the server crops it square at 512×512", "ok");
@@ -158,4 +164,7 @@ export function openMetadataDialog(
     ),
     el("div", { class: "dialog-actions" }, el("button", { class: "btn btn-primary", text: "Done", onclick: () => dlg.close() })),
   );
+  dlg.root.addEventListener("close", () => {
+    if (jacketUrl) URL.revokeObjectURL(jacketUrl);
+  });
 }

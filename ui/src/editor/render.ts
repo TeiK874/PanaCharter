@@ -129,6 +129,7 @@ export class Renderer {
   ): { kind: "lanes"; t: number; lane: number } | { kind: "gutter"; t: number } | null {
     const o = s.orientation;
     const timePos = o === "vertical" ? y : x;
+    if (timePos < this.tOffset(o)) return null; // lane-label strip (horizontal mode)
     const t = s.scroll + (timePos - this.tOffset(o)) / s.zoom;
     const crossPos = (o === "vertical" ? x : y) - GUTTER;
     if (crossPos < 0) return { kind: "gutter", t };

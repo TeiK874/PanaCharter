@@ -201,6 +201,9 @@ fn find_asset(dir: &Path, stem: &str) -> Option<(String, PathBuf)> {
     for entry in fs::read_dir(dir).ok()?.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if let Some(ext) = name.strip_prefix(&prefix) {
+            if ext.ends_with(".tmp") {
+                continue; // leftover from an interrupted replacement
+            }
             return Some((ext.to_string(), entry.path()));
         }
     }
@@ -219,10 +222,6 @@ fn mtime_ms(path: &Path) -> Option<u64> {
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64)
-}
-
-fn asset_mtime(dir: &Path, stem: &str) -> Option<u64> {
-    find_asset(dir, stem).and_then(|(_, path)| mtime_ms(&path))
 }
 
 fn read_manifest(dir: &Path) -> Result<Manifest, String> {
@@ -321,6 +320,9 @@ pub fn project_list(app: AppHandle) -> Result<Vec<ProjectSummary>, String> {
     for entry in fs::read_dir(root).map_err(es)?.flatten() {
         if entry.path().is_dir() {
             let id = entry.file_name().to_string_lossy().to_string();
+            if valid_id(&id).is_err() {
+                continue; // hand-made dir the API can't address — don't show a ghost
+            }
             if let Some(s) = summarize(&id, &entry.path()) {
                 out.push(s);
             }
@@ -435,8 +437,14 @@ pub fn project_set_audio(app: AppHandle, request: tauri::ipc::Request<'_>) -> Re
     let (id, bytes) = raw_body(&request)?;
     let dir = project_dir(&app, &id)?;
     let ext = sniff_audio_ext(bytes);
+    // validate by decoding BEFORE touching the old asset — a flac renamed
+    // .mp3 (or a webp sniffed as wav) should fail here with a clear message,
+    // not later during editor load or upload
+    crate::audio::decode_to_pcm(bytes.to_vec(), Some(ext))?;
+    let tmp = dir.join(format!("audio.{ext}.tmp"));
+    fs::write(&tmp, bytes).map_err(es)?;
     remove_asset(&dir, "audio");
-    fs::write(dir.join(format!("audio.{ext}")), bytes).map_err(es)?;
+    fs::rename(&tmp, dir.join(format!("audio.{ext}"))).map_err(es)?;
     Ok(ext.to_string())
 }
 
@@ -445,8 +453,10 @@ pub fn project_set_jacket(app: AppHandle, request: tauri::ipc::Request<'_>) -> R
     let (id, bytes) = raw_body(&request)?;
     let dir = project_dir(&app, &id)?;
     let ext = sniff_image_ext(bytes);
+    let tmp = dir.join(format!("jacket.{ext}.tmp"));
+    fs::write(&tmp, bytes).map_err(es)?;
     remove_asset(&dir, "jacket");
-    fs::write(dir.join(format!("jacket.{ext}")), bytes).map_err(es)?;
+    fs::rename(&tmp, dir.join(format!("jacket.{ext}"))).map_err(es)?;
     Ok(ext.to_string())
 }
 
@@ -566,8 +576,17 @@ pub fn import_zip_bytes(app: &AppHandle, bytes: Vec<u8>) -> Result<ProjectSummar
     let mut audio: Option<Vec<u8>> = None;
     let mut charts: Vec<(u32, Vec<u8>)> = Vec::new();
 
+    const MAX_ENTRY: u64 = 64 * 1024 * 1024;
+    let mut total: u64 = 0;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(es)?;
+        if file.size() > MAX_ENTRY {
+            return Err(format!("Package entry '{}' is implausibly large", file.name()));
+        }
+        total = total.saturating_add(file.size());
+        if total > 2 * MAX_ENTRY {
+            return Err("Package decompresses to an implausible size".into());
+        }
         let name = file.name().to_string();
         let mut data = Vec::new();
         file.read_to_end(&mut data).map_err(es)?;
@@ -689,6 +708,11 @@ pub struct UploadBundle {
     pub charts: Vec<(u32, u32, Vec<u8>)>,
     pub audio: (String, Vec<u8>),
     pub jacket: (String, Vec<u8>),
+    /// mtimes captured when the bytes were read — recording these (rather than
+    /// re-sampling after the upload) keeps change detection honest if the user
+    /// swaps an asset while the upload is in flight
+    pub audio_mtime_ms: Option<u64>,
+    pub jacket_mtime_ms: Option<u64>,
 }
 
 pub fn collect_upload(app: &AppHandle, id: &str) -> Result<UploadBundle, String> {
@@ -698,6 +722,8 @@ pub fn collect_upload(app: &AppHandle, id: &str) -> Result<UploadBundle, String>
         find_asset(&dir, "audio").ok_or("Add an audio track before uploading")?;
     let (jacket_ext, jacket_path) =
         find_asset(&dir, "jacket").ok_or("Add a jacket image before uploading")?;
+    let audio_mtime_ms = mtime_ms(&audio_path);
+    let jacket_mtime_ms = mtime_ms(&jacket_path);
     let charts = effective_levels(&dir, &manifest)
         .into_iter()
         .map(|lm| {
@@ -713,22 +739,31 @@ pub fn collect_upload(app: &AppHandle, id: &str) -> Result<UploadBundle, String>
         charts,
         audio: (audio_ext, fs::read(audio_path).map_err(es)?),
         jacket: (jacket_ext, fs::read(jacket_path).map_err(es)?),
+        audio_mtime_ms,
+        jacket_mtime_ms,
     })
 }
 
-pub fn record_upload(app: &AppHandle, id: &str, server: &str, music_id: u64) {
-    if let Ok(dir) = project_dir(app, id) {
-        let mut editor = read_editor(&dir);
-        editor.last_upload = Some(LastUpload {
-            server: server.to_string(),
-            music_id,
-            audio_mtime_ms: asset_mtime(&dir, "audio"),
-            jacket_mtime_ms: asset_mtime(&dir, "jacket"),
-        });
-        if let Ok(bytes) = serde_json::to_vec_pretty(&editor) {
-            let _ = fs::write(dir.join("editor.json"), bytes);
-        }
-    }
+pub fn record_upload(
+    app: &AppHandle,
+    id: &str,
+    server: &str,
+    music_id: u64,
+    audio_mtime_ms: Option<u64>,
+    jacket_mtime_ms: Option<u64>,
+) -> Option<LastUpload> {
+    let dir = project_dir(app, id).ok()?;
+    let mut editor = read_editor(&dir);
+    let lu = LastUpload {
+        server: server.to_string(),
+        music_id,
+        audio_mtime_ms,
+        jacket_mtime_ms,
+    };
+    editor.last_upload = Some(lu.clone());
+    let bytes = serde_json::to_vec_pretty(&editor).ok()?;
+    fs::write(dir.join("editor.json"), bytes).ok()?;
+    Some(lu)
 }
 
 pub struct UpdateBundle {
@@ -740,6 +775,9 @@ pub struct UpdateBundle {
     /// Only present when changed since the recorded upload.
     pub audio: Option<(String, Vec<u8>)>,
     pub jacket: Option<(String, Vec<u8>)>,
+    /// mtimes to record after a successful update (see UploadBundle).
+    pub audio_mtime_ms: Option<u64>,
+    pub jacket_mtime_ms: Option<u64>,
 }
 
 pub fn collect_update(app: &AppHandle, id: &str) -> Result<UpdateBundle, String> {
@@ -760,21 +798,23 @@ pub fn collect_update(app: &AppHandle, id: &str) -> Result<UpdateBundle, String>
         .collect::<Result<Vec<_>, String>>()?;
     let removed_levels = (1..=4).filter(|l| !chart_path(&dir, *l).exists()).collect();
 
-    let changed_asset = |stem: &str, recorded: Option<u64>| -> Result<Option<(String, Vec<u8>)>, String> {
+    let changed_asset = |stem: &str,
+                         recorded: Option<u64>|
+     -> Result<(Option<(String, Vec<u8>)>, Option<u64>), String> {
         match find_asset(&dir, stem) {
             Some((ext, path)) => {
                 let now = mtime_ms(&path);
                 if now.is_some() && now == recorded {
-                    Ok(None) // unchanged since last upload/update
+                    Ok((None, recorded)) // unchanged since last upload/update
                 } else {
-                    Ok(Some((ext, fs::read(path).map_err(es)?)))
+                    Ok((Some((ext, fs::read(&path).map_err(es)?)), now))
                 }
             }
-            None => Ok(None), // absent locally = keep the server's copy
+            None => Ok((None, None)), // absent locally = keep the server's copy
         }
     };
-    let audio = changed_asset("audio", last.and_then(|l| l.audio_mtime_ms))?;
-    let jacket = changed_asset("jacket", last.and_then(|l| l.jacket_mtime_ms))?;
+    let (audio, audio_mtime_ms) = changed_asset("audio", last.and_then(|l| l.audio_mtime_ms))?;
+    let (jacket, jacket_mtime_ms) = changed_asset("jacket", last.and_then(|l| l.jacket_mtime_ms))?;
 
     Ok(UpdateBundle {
         manifest,
@@ -782,5 +822,7 @@ pub fn collect_update(app: &AppHandle, id: &str) -> Result<UpdateBundle, String>
         removed_levels,
         audio,
         jacket,
+        audio_mtime_ms,
+        jacket_mtime_ms,
     })
 }

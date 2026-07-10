@@ -35,6 +35,8 @@ export interface Manifest {
 export interface LastUpload {
   server: string;
   music_id: number;
+  audio_mtime_ms?: number | null;
+  jacket_mtime_ms?: number | null;
 }
 
 export interface EditorMeta {

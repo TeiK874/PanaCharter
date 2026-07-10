@@ -2,7 +2,7 @@
 // validation + normalization, so stray fields and legacy effects are cleaned up.
 
 import type { ChartConverter, ImportedChart } from "./index.js";
-import { makeNote } from "./index.js";
+import { makeNote } from "./util.js";
 
 export const sif1Converter: ChartConverter = {
   id: "sif1",

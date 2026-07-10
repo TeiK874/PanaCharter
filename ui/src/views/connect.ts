@@ -40,6 +40,18 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
     );
   }
 
+  const logoutBtn = el("button", {
+    class: "btn",
+    text: "Log out",
+    style: session.logged_in ? "" : "display:none",
+    onclick: () =>
+      void api.logout().then(async () => {
+        loginStatus.replaceChildren();
+        logoutBtn.style.display = "none";
+        await ctx.onSession();
+        toast("Logged out", "ok");
+      }),
+  });
   if (session.logged_in) {
     setStatus(loginStatus, true, `Logged in as ${session.uid}`);
   }
@@ -75,6 +87,9 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
         );
       }
       await ctx.onSession();
+      // switching servers drops the token — don't keep a stale "Logged in as"
+      const si = await api.sessionInfo();
+      if (!si.logged_in) loginStatus.replaceChildren();
       return true;
     } catch (e) {
       setStatus(serverStatus, false, String(e));
@@ -91,11 +106,12 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
   });
 
   async function doLogin(): Promise<void> {
-    const uid = Number(uidInput.value);
-    if (!uid || !passInput.value) {
-      setStatus(loginStatus, false, "User ID and transfer password are required.");
+    const raw = uidInput.value.trim();
+    if (!/^\d{1,15}$/.test(raw) || !passInput.value) {
+      setStatus(loginStatus, false, "Enter your numeric user ID (up to 15 digits) and transfer password.");
       return;
     }
+    const uid = Number(raw);
     loginBtn.disabled = true;
     setStatus(loginStatus, null, "Logging in…");
     try {
@@ -136,7 +152,7 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
       el("hr", { style: "border:none;border-top:1px solid var(--line)" }),
       el("label", { class: "field" }, "User ID", uidInput),
       el("label", { class: "field" }, "Transfer password", passInput),
-      el("div", { class: "row" }, loginBtn, loginStatus),
+      el("div", { class: "row" }, loginBtn, logoutBtn, loginStatus),
       el("p", {
         class: "sub",
         text: "Heads-up: the server allows one webui session at a time — logging in here signs out a browser session for the same account, and the session lasts 24 hours.",

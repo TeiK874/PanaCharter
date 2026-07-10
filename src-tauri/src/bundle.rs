@@ -109,7 +109,16 @@ impl<'a> Cur<'a> {
 // UnityFS container
 // ---------------------------------------------------------------------------
 
+/// Decompressed-size ceilings — real bundles we handle are a few MB; these
+/// stop a crafted header from asking for a terabyte allocation (which aborts
+/// the process, not just the command).
+const MAX_BLOCK_SIZE: usize = 256 * 1024 * 1024;
+const MAX_TOTAL_SIZE: usize = 1024 * 1024 * 1024;
+
 fn decompress(kind: u32, data: &[u8], out_size: usize) -> R<Vec<u8>> {
+    if out_size > MAX_BLOCK_SIZE {
+        return Err(format!("Refusing implausible decompressed size ({out_size} bytes)"));
+    }
     match kind {
         0 => Ok(data.to_vec()),
         1 => {
@@ -198,7 +207,11 @@ pub(crate) fn read_unityfs(bytes: &[u8]) -> R<Vec<(String, Vec<u8>)>> {
     if flags & 0x200 != 0 {
         c.align(16); // kArchiveBlockInfoNeedPaddingAtStart
     }
-    let mut data = Vec::with_capacity(blocks.iter().map(|b| b.0).sum());
+    let total: usize = blocks.iter().map(|b| b.0).sum();
+    if total > MAX_TOTAL_SIZE {
+        return Err(format!("Refusing implausible bundle size ({total} bytes declared)"));
+    }
+    let mut data = Vec::with_capacity(total);
     for (unc, comp, bflags) in blocks {
         let chunk = c.take(comp)?;
         data.extend_from_slice(&decompress(bflags & 0x3F, chunk, unc)?);

@@ -80,10 +80,14 @@ fn note_bgm_id(text: &str) -> Option<String> {
     let mut header_bgm = None;
     for line in text.lines() {
         let line = line.trim();
-        if line.starts_with("#WAV") && line.len() > 7 {
-            let value = line[7..].trim();
+        if line.starts_with("#WAV") {
+            // char-boundary-safe: bundle text is untrusted lossy UTF-8
+            let value = line.split_whitespace().nth(1).unwrap_or("");
             if let Some(base) = value.strip_suffix(".wav") {
-                if base.starts_with("bgm") && base[3..].chars().all(|c| c.is_ascii_digit()) {
+                if base.len() > 3
+                    && base.starts_with("bgm")
+                    && base[3..].chars().all(|c| c.is_ascii_digit())
+                {
                     return Some(base.to_string());
                 }
             }
@@ -224,7 +228,12 @@ fn decode_texture_to_png(tex: &Texture, raw: &[u8]) -> Result<Vec<u8>, String> {
         48 => texture2ddecoder::decode_astc_4_4(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
         49 => texture2ddecoder::decode_astc_5_5(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
         50 => texture2ddecoder::decode_astc_6_6(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
-        51 => texture2ddecoder::decode_astc_8_8(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
+        51 | 57 => texture2ddecoder::decode_astc_8_8(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
+        52 | 58 => texture2ddecoder::decode_astc_10_10(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
+        53 | 59 => texture2ddecoder::decode_astc_12_12(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
+        54 => texture2ddecoder::decode_astc_4_4(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
+        55 => texture2ddecoder::decode_astc_5_5(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
+        56 => texture2ddecoder::decode_astc_6_6(raw, w, h, &mut pixels).map_err(|e| e.to_string()),
         other => Err(format!("unsupported texture format {other}")),
     };
     r.map_err(|e| format!("texture decode failed: {e}"))?;
@@ -315,11 +324,14 @@ fn scan_bundle(session: &mut Session, bytes: &[u8]) -> Result<(), String> {
                     let Ok(len) = c.u32(be) else { continue };
                     let Ok(body) = c.take(len as usize) else { continue };
                     if let Some(bgm) = split_bgm_name(&name) {
-                        session
-                            .bgm
-                            .entry(bgm)
-                            .or_default()
-                            .push((name, body.to_vec()));
+                        let chunks = session.bgm.entry(bgm).or_default();
+                        // re-scanning the same bundle must replace, not duplicate —
+                        // duplicated chunks interleave into a corrupt ACB
+                        if let Some(existing) = chunks.iter_mut().find(|(n, _)| *n == name) {
+                            existing.1 = body.to_vec();
+                        } else {
+                            chunks.push((name, body.to_vec()));
+                        }
                     } else if let Some((stem, diff)) = split_chart_name(&name) {
                         let text = String::from_utf8_lossy(body).into_owned();
                         let entry = session.songs.entry(stem).or_default();
@@ -369,10 +381,11 @@ fn scan_bundle(session: &mut Session, bytes: &[u8]) -> Result<(), String> {
                 TextureData::Streamed { path, offset, size } => {
                     let base = path.rsplit('/').next().unwrap_or(path);
                     let Some(res) = ress.get(base) else { continue };
-                    let s = *offset as usize;
-                    let Some(slice) = res.get(s..s + *size as usize) else {
+                    let start = *offset as usize;
+                    let Some(end) = start.checked_add(*size as usize) else {
                         continue;
                     };
+                    let Some(slice) = res.get(start..end) else { continue };
                     slice.to_vec()
                 }
             };
@@ -505,15 +518,17 @@ fn decode_audio(
         match status {
             Ok(out) if out.status.success() => {
                 let bytes = std::fs::read(&out_path).map_err(|e| e.to_string())?;
-                let _ = std::fs::remove_file(&in_path);
                 let _ = std::fs::remove_file(&out_path);
                 if bytes.len() > 1000 {
+                    // keep the input until we're done — the wav fallback needs it
+                    let _ = std::fs::remove_file(&in_path);
                     return Ok((ext.to_string(), bytes));
                 }
                 last_err = "ffmpeg produced an empty file".into();
             }
             Ok(out) => {
                 last_err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                let _ = std::fs::remove_file(&out_path);
             }
             Err(e) => last_err = e.to_string(),
         }
@@ -541,22 +556,43 @@ async fn fetch_cached(
     let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(file);
-    if let Ok(bytes) = std::fs::read(&path) {
-        if let Ok(v) = serde_json::from_slice(&bytes) {
-            return Ok(v);
+    let fresh = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|age| age < std::time::Duration::from_secs(7 * 24 * 3600))
+        .unwrap_or(false);
+    if fresh {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(v) = serde_json::from_slice(&bytes) {
+                return Ok(v);
+            }
         }
     }
-    let bytes = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("bestdori fetch failed: {e}"))?
-        .bytes()
-        .await
-        .map_err(|e| e.to_string())?;
-    let v: Value = serde_json::from_slice(&bytes).map_err(|e| format!("bad bestdori data: {e}"))?;
-    let _ = std::fs::write(&path, &bytes);
-    Ok(v)
+    let fetched: Result<Value, String> = async {
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| format!("bestdori fetch failed: {e}"))?;
+        if !resp.status().is_success() {
+            return Err(format!("bestdori answered HTTP {}", resp.status()));
+        }
+        let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+        let v: Value =
+            serde_json::from_slice(&bytes).map_err(|e| format!("bad bestdori data: {e}"))?;
+        let _ = std::fs::write(&path, &bytes);
+        Ok(v)
+    }
+    .await;
+    match fetched {
+        Ok(v) => Ok(v),
+        // network down but a stale cache exists: better than nothing
+        Err(e) => std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .ok_or(e),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -583,7 +619,7 @@ pub fn bandori_scan(
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("Expected a binary payload".into());
     };
-    let mut sessions = state.sessions.lock().unwrap();
+    let mut sessions = state.sessions.lock().unwrap_or_else(|p| p.into_inner());
     let session = sessions.entry(session_id).or_default();
     scan_bundle(session, bytes)?;
     Ok(catalog(session))
@@ -596,7 +632,7 @@ pub fn bandori_chart(
     stem: String,
     difficulty: String,
 ) -> Result<String, String> {
-    let sessions = state.sessions.lock().unwrap();
+    let sessions = state.sessions.lock().unwrap_or_else(|p| p.into_inner());
     sessions
         .get(&session_id)
         .and_then(|s| s.songs.get(&stem))
@@ -614,7 +650,7 @@ pub async fn bandori_meta(
     session_id: String,
 ) -> Result<Value, String> {
     let bgm_ids: Vec<(String, String)> = {
-        let sessions = state.sessions.lock().unwrap();
+        let sessions = state.sessions.lock().unwrap_or_else(|p| p.into_inner());
         let session = sessions.get(&session_id).ok_or("Unknown session")?;
         session
             .songs
@@ -676,7 +712,7 @@ pub fn bandori_import_song(
         return Err("No difficulties to import".into());
     }
     let (jacket, bgm_chunks) = {
-        let sessions = state.sessions.lock().unwrap();
+        let sessions = state.sessions.lock().unwrap_or_else(|p| p.into_inner());
         let session = sessions.get(&session_id).ok_or("Unknown session")?;
         let parts = session.songs.get(&stem).ok_or("Song not in this session")?;
         let jacket = session.jackets.get(&stem).cloned();
@@ -736,7 +772,7 @@ pub fn bandori_import_song(
 
 #[tauri::command]
 pub fn bandori_close(state: State<'_, BandoriBatch>, session_id: String) {
-    state.sessions.lock().unwrap().remove(&session_id);
+    state.sessions.lock().unwrap_or_else(|p| p.into_inner()).remove(&session_id);
 }
 
 #[cfg(test)]

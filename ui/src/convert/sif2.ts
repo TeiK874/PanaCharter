@@ -4,7 +4,7 @@
 // back into their head's duration, line 0–8 → position 1–9.
 
 import type { ChartConverter, ImportedChart } from "./index.js";
-import { makeNote } from "./index.js";
+import { makeNote } from "./util.js";
 
 interface RawNote {
   id: number;
@@ -45,7 +45,7 @@ function fromRawNotes(raw: RawNote[]): ImportedChart {
       while (cur && !seen.has(cur.id)) {
         seen.add(cur.id);
         last = cur;
-        if (seen.size > 2 + 1) chainWaypoints++; // nodes beyond head+tail
+        if (seen.size > 2) chainWaypoints++; // nodes beyond head+tail
         cur = cur.child_id !== 0 ? byId.get(cur.child_id) : undefined;
       }
       if (last.time > n.time) {
@@ -118,7 +118,7 @@ function parseAssetYaml(text: string): RawNote[] | null {
       continue;
     }
     if (cur) {
-      const kv = line.match(/^\s*m_(\w+):\s*(-?[\d.eE+]+)\s*$/);
+      const kv = line.match(/^\s*m_(\w+):\s*([-+\d.eE]+)\s*$/);
       if (kv) cur[`m_${kv[1]}`] = Number(kv[2]);
       else if (!/^\s/.test(line)) flush(); // left the list block
     }

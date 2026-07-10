@@ -32,6 +32,7 @@ export function openBandoriBatchDialog(onDone: () => void): void {
   const sessionId = crypto.randomUUID();
   let rows: Row[] = [];
   let busy = false;
+  let closed = false;
 
   const statusLine = el("p", { class: "dialog-body", text: "No bundles scanned yet." });
   const table = el("div", {});
@@ -118,12 +119,15 @@ export function openBandoriBatchDialog(onDone: () => void): void {
     files: { name: string; read: () => Promise<ArrayBuffer> }[],
     quietErrors: boolean,
   ): Promise<void> {
+    if (busy || closed) return;
     busy = true;
     addBtn.disabled = true;
     addDirBtn.disabled = true;
+    importBtn.disabled = true;
     let done = 0;
     let skipped = 0;
     for (const file of files) {
+      if (closed) break; // dialog closed mid-scan — stop feeding the session
       statusLine.textContent = `Scanning ${file.name} (${++done}/${files.length})…`;
       try {
         applyCatalog(await api.bandoriScan(sessionId, await file.read()));
@@ -135,6 +139,11 @@ export function openBandoriBatchDialog(onDone: () => void): void {
       renderTable();
     }
     busy = false;
+    if (closed) {
+      // an in-flight scan may have re-created the closed session — drop it
+      void api.bandoriClose(sessionId).catch(() => {});
+      return;
+    }
     addBtn.disabled = false;
     addDirBtn.disabled = false;
     importBtn.disabled = !rows.length;
@@ -178,13 +187,16 @@ export function openBandoriBatchDialog(onDone: () => void): void {
   }
 
   async function doImport(): Promise<void> {
+    if (busy || closed) return;
     const picked = rows.filter((r) => r.checked);
     if (!picked.length) return;
     busy = true;
     importBtn.disabled = true;
     addBtn.disabled = true;
+    addDirBtn.disabled = true;
     let ok = 0;
     for (const row of picked) {
+      if (closed) break;
       row.status = "importing…";
       renderTable();
       try {
@@ -221,7 +233,14 @@ export function openBandoriBatchDialog(onDone: () => void): void {
       renderTable();
     }
     busy = false;
+    if (closed) {
+      void api.bandoriClose(sessionId).catch(() => {});
+      if (ok) toast(`Imported ${ok} Bandori song${ok === 1 ? "" : "s"} before closing`, "ok");
+      onDone();
+      return;
+    }
     addBtn.disabled = false;
+    addDirBtn.disabled = false;
     importBtn.disabled = false;
     statusLine.textContent = `Imported ${ok}/${picked.length} songs into Projects.`;
     toast(`Imported ${ok} Bandori song${ok === 1 ? "" : "s"}`, "ok");
@@ -238,5 +257,9 @@ export function openBandoriBatchDialog(onDone: () => void): void {
     statusLine,
     el("div", { style: "max-height:45vh;overflow:auto" }, table),
   );
-  dlg.root.addEventListener("close", () => void api.bandoriClose(sessionId).catch(() => {}));
+  dlg.root.addEventListener("close", () => {
+    closed = true;
+    // in-flight loops check `closed` and clean the session up themselves
+    if (!busy) void api.bandoriClose(sessionId).catch(() => {});
+  });
 }

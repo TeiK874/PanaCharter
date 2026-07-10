@@ -8,9 +8,19 @@ const app = document.getElementById("app")!;
 
 let currentDispose: (() => void | Promise<void>) | null = null;
 let viewHost = el("div", { style: "display:contents" });
+let mountEpoch = 0;
 
 async function mount(view: { root: HTMLElement; dispose?: () => void | Promise<void> }): Promise<void> {
-  if (currentDispose) await currentDispose();
+  // serialize rapid navigations: the newest mount wins, losers get disposed
+  const epoch = ++mountEpoch;
+  const old = currentDispose;
+  currentDispose = null;
+  if (old) await old();
+  if (epoch !== mountEpoch) {
+    // a newer mount raced past us — this view will never be shown
+    await view.dispose?.();
+    return;
+  }
   currentDispose = view.dispose ?? null;
   viewHost.replaceChildren(view.root);
 }

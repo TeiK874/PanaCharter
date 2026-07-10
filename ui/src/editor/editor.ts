@@ -27,6 +27,8 @@ type Gesture =
       startT: number;
       startLane: number;
       orig: Map<number, { t: number; lane: number }>;
+      minLane: number;
+      maxLane: number;
       part: "head" | "tail";
       resizeNote: Note | null;
     }
@@ -98,6 +100,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   // --- persistence ----------------------------------------------------------
   let saveTimer: number | null = null;
   let saveState: "saved" | "dirty" | "saving" = "saved";
+  let saveGen = 0;
 
   function chartsRecord(): Record<string, SifNote[]> {
     const out: Record<string, SifNote[]> = {};
@@ -118,28 +121,35 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       .sort((a, b) => a.level - b.level);
   }
 
-  async function doSave(): Promise<void> {
+  async function doSave(): Promise<boolean> {
     if (saveTimer !== null) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
+    const gen = ++saveGen;
     syncManifestLevels();
     editorMeta.snap = snap;
     editorMeta.zoom = zoom;
     editorMeta.orientation = orientation;
     saveState = "saving";
     updateStatus();
+    let ok = true;
     try {
       await api.projectSave(data.id, manifest, editorMeta, chartsRecord());
-      saveState = "saved";
+      // edits made while the save was in flight keep the doc dirty
+      if (gen === saveGen && saveTimer === null) saveState = "saved";
+      else if (saveState === "saving") saveState = "dirty";
     } catch (e) {
       saveState = "dirty";
+      ok = false;
       toast(`Save failed: ${e}`, "error");
     }
     updateStatus();
+    return ok;
   }
 
   function markDirty(): void {
+    saveGen++;
     saveState = "dirty";
     updateStatus();
     if (saveTimer !== null) clearTimeout(saveTimer);
@@ -603,12 +613,33 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   }
 
   async function upload(): Promise<void> {
-    await doSave();
+    if (!(await doSave())) {
+      toast("Saving failed — not uploading a stale project", "error");
+      return;
+    }
     if (![...docs.values()].some((d) => d.notes.length)) {
       toast("Chart at least one difficulty before uploading", "error");
       return;
     }
-    openUploadDialog(data.id, manifest.name, editorMeta.last_upload);
+    const audioDur = player.loaded ? player.duration : 0;
+    const errors = [...docs.entries()].flatMap(([lvl, d]) =>
+      d.notes.length
+        ? d.issues(audioDur)
+            .filter((i) => i.severity === "error")
+            .map((i) => `${DIFFICULTIES[lvl].short}: ${i.message}`)
+        : [],
+    );
+    if (errors.length) {
+      openDialog(
+        "Fix chart errors before uploading",
+        el("p", { class: "dialog-body", text: "These would be rejected by the server or crash the game:" }),
+        ...errors.slice(0, 12).map((m) => el("p", { class: "dialog-body", text: `✕ ${m}` })),
+      );
+      return;
+    }
+    openUploadDialog(data.id, manifest.name, editorMeta.last_upload, (lu) => {
+      editorMeta.last_upload = lu;
+    });
   }
 
   // --- gestures ---------------------------------------------------------------
@@ -643,6 +674,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
   canvas.addEventListener("pointerdown", (e) => {
+    if (gesture.type !== "none") return; // a gesture is active (other button/pointer)
     canvas.setPointerCapture(e.pointerId);
     const { x, y } = canvasPos(e);
     const s = viewState();
@@ -697,13 +729,21 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         d.selection.add(hit.note.id);
       }
       const orig = new Map<number, { t: number; lane: number }>();
-      for (const n of d.selectedNotes()) orig.set(n.id, { t: n.t, lane: n.lane });
+      let minLane = 9;
+      let maxLane = 1;
+      for (const n of d.selectedNotes()) {
+        orig.set(n.id, { t: n.t, lane: n.lane });
+        minLane = Math.min(minLane, n.lane);
+        maxLane = Math.max(maxLane, n.lane);
+      }
       gesture = {
         type: "move",
         pre: d.begin(),
         startT: info.t,
         startLane: info.lane,
         orig,
+        minLane,
+        maxLane,
         part: hit.part === "tail" ? "tail" : "head",
         resizeNote: hit.part === "tail" ? hit.note : null,
       };
@@ -770,13 +810,34 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           const n = gesture.resizeNote;
           n.dur = Math.max(gridStep(), snapTime(info.t) - n.t);
         } else {
-          const dt = info.t - gesture.startT;
-          const dl = info.lane - gesture.startLane;
+          // Move by an INTEGER number of grid steps so relative rhythm is
+          // preserved: on-grid notes are re-derived from the grid formula
+          // (stays bit-exact), off-grid notes (BPM-change imports) shift by
+          // the same delta instead of being quantized to the wrong grid.
+          const rawDt = info.t - gesture.startT;
+          const step = bpm() > 0 ? gridStep() : 0;
+          const kd = step > 0 ? Math.round(rawDt / step) : 0;
+          // clamp the lane delta so the WHOLE selection stays in 1..9 —
+          // per-note clamping compresses lanes and stacks notes
+          const dl = Math.max(
+            1 - gesture.minLane,
+            Math.min(9 - gesture.maxLane, info.lane - gesture.startLane),
+          );
           for (const n of d.notes) {
             const o = gesture.orig.get(n.id);
             if (!o) continue;
-            n.t = snapTime(o.t + dt);
-            n.lane = Math.max(1, Math.min(9, o.lane + dl));
+            if (step > 0) {
+              const onGrid = snapTime(o.t) === o.t;
+              if (onGrid) {
+                const k = Math.round((o.t - editorMeta.offset_sec) / step) + kd;
+                n.t = Math.max(0, editorMeta.offset_sec + k * step);
+              } else {
+                n.t = Math.max(0, o.t + kd * step);
+              }
+            } else {
+              n.t = Math.max(0, o.t + rawDt);
+            }
+            n.lane = o.lane + dl;
           }
         }
         requestDraw();
@@ -799,7 +860,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     }
   });
 
-  canvas.addEventListener("pointerup", (e) => {
+  const finishGesture = (e: PointerEvent) => {
     const d = doc();
     switch (gesture.type) {
       case "place-hold": {
@@ -822,7 +883,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         break;
       }
       case "scrub": {
-        if (gesture.resume) player.toggle();
+        if (gesture.resume && !player.playing) player.play();
         break;
       }
       default:
@@ -832,7 +893,9 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
     requestDraw();
     updateStatus();
-  });
+  };
+  canvas.addEventListener("pointerup", finishGesture);
+  canvas.addEventListener("pointercancel", finishGesture);
 
   canvas.addEventListener("pointerleave", () => {
     ghost = null;
@@ -888,6 +951,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     const d = doc();
     const ctrl = e.ctrlKey || e.metaKey;
 
+    // editing/transport keys during an active pointer gesture would corrupt
+    // the gesture's undo bookkeeping — ignore them until it ends
+    if (gesture.type !== "none") return;
+
     if (e.code === "Space") {
       e.preventDefault();
       player.toggle();
@@ -930,7 +997,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       d.edit(() => {
         d.selection.clear();
         for (const c of clipboard) {
-          const n = d.place(base + c.dt, c.lane, c.kind, c.dur);
+          // re-derive from the grid formula so pasted notes stay bit-exact
+          // with freshly placed ones (exact f64 equality = in-game sync)
+          const t = bpm() > 0 ? snapTime(base + c.dt) : base + c.dt;
+          const n = d.place(t, c.lane, c.kind, c.dur);
           d.selection.add(n.id);
         }
       });
@@ -995,7 +1065,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       // keep the playhead in view
       const span = renderer.timeSpan(viewState());
       const cur = player.displayTime;
-      if (cur > scroll + span * 0.75 || cur < scroll) {
+      if ((cur > scroll + span * 0.75 || cur < scroll) && gesture.type === "none") {
         scroll = cur - span * 0.25;
       }
       timeDisplay.textContent = `${fmtTime(cur)} / ${fmtTime(player.duration)}`;
@@ -1055,6 +1125,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       window.removeEventListener("keydown", onKey);
       resizeObserver.disconnect();
       player.dispose();
+      if (saveTimer !== null) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+      }
       if (saveState !== "saved") await doSave();
     },
   };

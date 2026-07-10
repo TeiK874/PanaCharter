@@ -361,9 +361,13 @@ pub fn start_playback(state: &NativeAudio, from_sec: f64, rate: f64) -> Result<(
     if pa().is_none() {
         return Err("Native audio not available".into());
     }
-    let my_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let my_gen;
     {
+        // bump the generation INSIDE the state lock: a concurrent pause could
+        // otherwise interleave between the bump and playing=true, leaving the
+        // state wedged at playing with no mixer thread
         let mut s = state.inner.lock().unwrap();
+        my_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let Some(pcm) = s.pcm.as_ref() else {
             return Err("No audio loaded".into());
         };
@@ -380,8 +384,8 @@ pub fn start_playback(state: &NativeAudio, from_sec: f64, rate: f64) -> Result<(
 }
 
 pub fn pause_playback(state: &NativeAudio) -> f64 {
-    state.generation.fetch_add(1, Ordering::SeqCst);
     let mut s = state.inner.lock().unwrap();
+    state.generation.fetch_add(1, Ordering::SeqCst);
     let rate = s.pcm.as_ref().map(|p| p.rate as f64).unwrap_or(44100.0);
     // rewind by what was buffered but never heard
     let heard = (s.pos / rate - s.latency_sec).max(0.0);

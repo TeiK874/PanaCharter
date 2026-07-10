@@ -136,10 +136,16 @@ pub async fn connect(
         .send()
         .await
         .map_err(|e| format!("Could not reach server: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Server answered HTTP {} for serverInfo", resp.status()));
+    }
     let info: Value = resp
         .json()
         .await
         .map_err(|_| "That doesn't look like an ew server (bad serverInfo response)".to_string())?;
+    if !info.is_object() || (info.get("data").is_none() && info.get("result").is_none()) {
+        return Err("That doesn't look like an ew server (unexpected serverInfo shape)".into());
+    }
     {
         let mut sess = state.session.lock().unwrap();
         if sess.server.as_deref() != Some(url.as_str()) {
@@ -180,7 +186,9 @@ pub async fn login(
         .await
         .map_err(|e| format!("Bad server response: {e}"))?;
     check_envelope(v)?;
-    let token = token.ok_or("Server accepted the login but sent no session cookie")?;
+    let token = token
+        .filter(|t| !t.is_empty())
+        .ok_or("Server accepted the login but sent no session cookie")?;
     let mut sess = state.session.lock().unwrap();
     sess.uid = Some(uid);
     sess.token = Some(token);
@@ -315,6 +323,36 @@ pub async fn fetch_jacket(
     Ok(tauri::ipc::Response::new(bytes.to_vec()))
 }
 
+/// Client-side validation the server explicitly delegates (no server-side
+/// range checks on bpm/level_number; webui enforces bpm ≥ 1, stars 1–20).
+fn validate_manifest(
+    m: &crate::projects::Manifest,
+    charts: &[(u32, u32, Vec<u8>)],
+) -> Result<(), String> {
+    if m.name.trim().is_empty() || m.artist.trim().is_empty() {
+        return Err("Song name and artist are required".into());
+    }
+    if charts.is_empty() {
+        return Err("At least one difficulty chart is required".into());
+    }
+    if !(1..=3).contains(&m.attribute) {
+        return Err("Attribute must be 1 (smile), 2 (pure) or 3 (cool)".into());
+    }
+    if let Some(bpm) = m.bpm {
+        if !(bpm >= 1.0 && bpm.is_finite()) {
+            return Err("BPM must be at least 1".into());
+        }
+    }
+    for (level, level_number, _) in charts {
+        if !(1..=20).contains(level_number) {
+            return Err(format!(
+                "Difficulty {level}: star level {level_number} is outside 1-20"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `POST /custom_song/upload` — multipart upload built from a local project.
 #[tauri::command]
 pub async fn upload_project(
@@ -324,17 +362,12 @@ pub async fn upload_project(
     visibility: String,
     shared_with: Vec<u64>,
     downloads_disabled: bool,
-) -> Result<u64, String> {
+) -> Result<Value, String> {
     let base = base_url(&state)?;
     let cookie = cookie_header(&state)?;
     let bundle = crate::projects::collect_upload(&app, &project_id)?;
     let m = &bundle.manifest;
-    if m.name.trim().is_empty() || m.artist.trim().is_empty() {
-        return Err("Song name and artist are required".into());
-    }
-    if bundle.charts.is_empty() {
-        return Err("At least one difficulty chart is required".into());
-    }
+    validate_manifest(m, &bundle.charts)?;
 
     use reqwest::multipart::{Form, Part};
     let mut form = Form::new()
@@ -400,8 +433,15 @@ pub async fn upload_project(
         .get("music_id")
         .and_then(|m| m.as_u64())
         .ok_or("Server did not return a music_id")?;
-    crate::projects::record_upload(&app, &project_id, &base, music_id);
-    Ok(music_id)
+    let lu = crate::projects::record_upload(
+        &app,
+        &project_id,
+        &base,
+        music_id,
+        bundle.audio_mtime_ms,
+        bundle.jacket_mtime_ms,
+    );
+    Ok(json!({ "music_id": music_id, "last_upload": lu }))
 }
 
 /// `POST /custom_song/update` — edit a song in place, keeping its music_id and
@@ -413,17 +453,12 @@ pub async fn update_project(
     state: State<'_, ServerState>,
     project_id: String,
     music_id: u64,
-) -> Result<u64, String> {
+) -> Result<Value, String> {
     let base = base_url(&state)?;
     let cookie = cookie_header(&state)?;
     let bundle = crate::projects::collect_update(&app, &project_id)?;
     let m = &bundle.manifest;
-    if m.name.trim().is_empty() || m.artist.trim().is_empty() {
-        return Err("Song name and artist are required".into());
-    }
-    if bundle.charts.is_empty() {
-        return Err("At least one difficulty chart is required".into());
-    }
+    validate_manifest(m, &bundle.charts)?;
 
     use reqwest::multipart::{Form, Part};
     let mut form = Form::new()
@@ -475,8 +510,15 @@ pub async fn update_project(
         .get("music_id")
         .and_then(|m| m.as_u64())
         .unwrap_or(music_id);
-    crate::projects::record_upload(&app, &project_id, &base, music_id);
-    Ok(music_id)
+    let lu = crate::projects::record_upload(
+        &app,
+        &project_id,
+        &base,
+        music_id,
+        bundle.audio_mtime_ms,
+        bundle.jacket_mtime_ms,
+    );
+    Ok(json!({ "music_id": music_id, "last_upload": lu }))
 }
 
 /// `GET /custom_song/download/{id}` — fetch an export package and import it

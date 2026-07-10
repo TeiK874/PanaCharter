@@ -7,7 +7,7 @@ function parseUserIds(raw: string): number[] | null {
   const ids: number[] = [];
   for (const part of raw.split(/[\s,]+/)) {
     if (!part) continue;
-    if (!/^\d+$/.test(part)) return null;
+    if (!/^\d{1,15}$/.test(part)) return null;
     ids.push(Number(part));
   }
   return ids;
@@ -17,6 +17,7 @@ export function openUploadDialog(
   projectId: string,
   songName: string,
   lastUpload: LastUpload | null,
+  onUploaded?: (lu: LastUpload) => void,
 ): void {
   let mode: "new" | "update" = "new";
 
@@ -90,18 +91,23 @@ export function openUploadDialog(
     onclick: () => void doUpload(),
   });
 
+  let busy = false;
+
   async function doUpload(): Promise<void> {
     const session = await api.sessionInfo();
     if (!session.logged_in) {
       status.textContent = "Not logged in — open the server panel (top right) and log in first.";
       return;
     }
+    busy = true;
     uploadBtn.disabled = true;
     status.textContent = "Uploading… (the server transcodes audio, this can take a moment)";
     try {
       if (mode === "update") {
-        const musicId = await api.updateSong(projectId, lastUpload!.music_id);
-        toast(`"${songName}" updated (#${musicId})`, "ok");
+        const result = await api.updateSong(projectId, lastUpload!.music_id);
+        if (result.last_upload) onUploaded?.(result.last_upload);
+        toast(`"${songName}" updated (#${result.music_id})`, "ok");
+        busy = false;
         dlg.close();
         return;
       } else {
@@ -116,19 +122,22 @@ export function openUploadDialog(
           uploadBtn.disabled = false;
           return;
         }
-        const musicId = await api.uploadProject(
+        const result = await api.uploadProject(
           projectId,
           visSelect.value,
           visSelect.value === "shared" ? shared : [],
           dlDisabled.checked,
         );
-        toast(`"${songName}" uploaded as #${musicId}`, "ok");
+        if (result.last_upload) onUploaded?.(result.last_upload);
+        toast(`"${songName}" uploaded as #${result.music_id}`, "ok");
+        busy = false;
         dlg.close();
         return;
       }
     } catch (e) {
       status.textContent = String(e);
     }
+    busy = false;
     uploadBtn.disabled = false;
   }
 
@@ -149,4 +158,8 @@ export function openUploadDialog(
     status,
     el("div", { class: "dialog-actions" }, uploadBtn),
   );
+  // don't let Esc silently orphan an in-flight upload
+  dlg.root.addEventListener("cancel", (e) => {
+    if (busy) e.preventDefault();
+  });
 }

@@ -2,12 +2,18 @@ import { invoke, invokeBinary } from "./tauri.js";
 import type {
   CatalogSong,
   EditorMeta,
+  LastUpload,
   Manifest,
   ProjectData,
   ProjectSummary,
   SessionInfo,
   SifNote,
 } from "./types.js";
+
+export interface UploadResult {
+  music_id: number;
+  last_upload: LastUpload | null;
+}
 
 // --- server ---------------------------------------------------------------
 
@@ -39,14 +45,14 @@ export const uploadProject = (
   sharedWith: number[],
   downloadsDisabled: boolean,
 ) =>
-  invoke<number>("upload_project", {
+  invoke<UploadResult>("upload_project", {
     projectId,
     visibility,
     sharedWith,
     downloadsDisabled,
   });
 export const updateSong = (projectId: string, musicId: number) =>
-  invoke<number>("update_project", { projectId, musicId });
+  invoke<UploadResult>("update_project", { projectId, musicId });
 export const downloadSongToProject = (musicId: number) =>
   invoke<ProjectSummary>("download_song_to_project", { musicId });
 
