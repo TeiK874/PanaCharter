@@ -8,6 +8,12 @@ use serde_json::{json, Value};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 
+/// Revision of the ew extended protocol this client implements, sent as
+/// `X-Protocol-Version` on every request. Absent = 0 = official client; the
+/// server gates features with `>=`. Level 1 = custom songs. Bump this when
+/// the client gains a feature the server gates on a higher level.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 pub struct ServerState {
     pub client: reqwest::Client,
     pub session: Mutex<Session>,
@@ -15,8 +21,15 @@ pub struct ServerState {
 
 impl ServerState {
     pub fn new() -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "X-Protocol-Version",
+            reqwest::header::HeaderValue::from_str(&PROTOCOL_VERSION.to_string())
+                .expect("protocol version is a valid header value"),
+        );
         Self {
             client: reqwest::Client::builder()
+                .default_headers(headers)
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .timeout(std::time::Duration::from_secs(600))
                 .build()
