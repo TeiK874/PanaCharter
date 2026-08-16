@@ -80,8 +80,10 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 
 | Input | Action |
 |---|---|
-| `1` / `2` / `3` / `4` | Select / Tap / Hold / Star tool |
+| `1` / `2` / `3` / `4` / `5` | Select / Tap / Hold / Star / Slide tool |
 | Click | Place note (drag to set a hold's length) |
+| Slide: click, click, … | Chain points across lanes · drag the last point to end it in a hold |
+| `Esc` (Slide tool) | End the current slide chain |
 | Drag note | Move it · drag a hold's **tail** to resize |
 | Right-click | Delete note |
 | Shift+click | Add to / remove from selection |

@@ -5,10 +5,13 @@ export interface SifNote {
   timing_sec: number;
   /** Lane 1–9, right-to-left (1 = rightmost). */
   position: number;
-  /** 1 tap, 2 simultaneous marker (=tap), 3 hold, 4 star, 11/12/13 swing (=tap). */
+  /** 1 tap, 2 simultaneous marker (=tap), 3 hold, 4 star, 11/12 slide, 13 slide ending in a hold. */
   effect: number;
-  /** Hold duration in seconds when effect == 3. */
+  /** Hold duration in seconds when effect == 3 or 13. */
   effect_value: number;
+  /** Slide chain id (effect 11/12/13 only). Notes sharing a value > 1 chain together in time
+   *  order; 1/absent means "not chained", matching SIF1's own default. */
+  notes_level?: number;
 }
 
 export interface LevelMeta {
