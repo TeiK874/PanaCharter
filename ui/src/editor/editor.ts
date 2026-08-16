@@ -289,17 +289,30 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     },
   });
 
+  // Tracks the last value the offset was committed at, so `change` can shift every
+  // difficulty's notes by exactly the net delta once editing settles (not per keystroke).
+  let committedOffset = editorMeta.offset_sec;
   const offsetInput = el("input", {
     type: "number",
     step: "0.001",
     value: String(editorMeta.offset_sec),
-    title: "Grid offset: time of beat 1 in seconds",
+    title: "Grid offset: time of beat 1 in seconds. Moving it shifts every difficulty's notes with it.",
     oninput: () => {
       const v = Number(offsetInput.value);
       if (Number.isFinite(v)) {
         editorMeta.offset_sec = v;
         markDirty();
         requestDraw();
+      }
+    },
+    onchange: () => {
+      const delta = editorMeta.offset_sec - committedOffset;
+      committedOffset = editorMeta.offset_sec;
+      if (delta === 0) return;
+      for (const d of docs.values()) {
+        d.edit(() => {
+          for (const n of d.notes) n.t = Math.max(0, n.t + delta);
+        });
       }
     },
   });
