@@ -531,6 +531,18 @@ fn build_package_zip(dir: &Path, manifest: &Manifest) -> Result<Vec<u8>, String>
     zip.write_all(&serde_json::to_vec_pretty(&export).map_err(es)?)
         .map_err(es)?;
 
+    // Editor-only state (grid offset, tempo changes, snap, zoom) travels with the package
+    // too, so re-importing it elsewhere doesn't lose the grid setup — but last_upload is
+    // cleared: a re-imported copy is a fresh project, not already linked to whatever
+    // server/music_id the original was uploaded to. This never reaches the ew server
+    // itself — collect_upload (the actual upload path) reads project files directly and
+    // never calls build_package_zip.
+    let mut editor = read_editor(dir);
+    editor.last_upload = None;
+    zip.start_file("editor.json", opts).map_err(es)?;
+    zip.write_all(&serde_json::to_vec_pretty(&editor).map_err(es)?)
+        .map_err(es)?;
+
     let (_, jacket_path) = find_asset(dir, "jacket").ok_or("Project has no jacket yet")?;
     zip.start_file("jacket", opts).map_err(es)?;
     zip.write_all(&fs::read(jacket_path).map_err(es)?).map_err(es)?;
@@ -592,6 +604,7 @@ pub fn import_zip_bytes(app: &AppHandle, bytes: Vec<u8>) -> Result<ProjectSummar
         .map_err(|_| "Package is not a valid zip file".to_string())?;
 
     let mut manifest: Option<Manifest> = None;
+    let mut editor: Option<EditorMeta> = None;
     let mut jacket: Option<Vec<u8>> = None;
     let mut audio: Option<Vec<u8>> = None;
     let mut charts: Vec<(u32, Vec<u8>)> = Vec::new();
@@ -617,6 +630,10 @@ pub fn import_zip_bytes(app: &AppHandle, bytes: Vec<u8>) -> Result<ProjectSummar
                         .map_err(|e| format!("Package manifest is not valid JSON: {e}"))?,
                 );
             }
+            // Grid offset/tempo changes/snap/zoom, if the package carries them (packages
+            // from the ew server or older charter versions won't) — best-effort, a
+            // missing or corrupt editor.json just falls back to EditorMeta::default().
+            "editor.json" => editor = serde_json::from_slice(&data).ok(),
             "jacket" => jacket = Some(data),
             "audio" => audio = Some(data),
             _ => {
@@ -654,7 +671,7 @@ pub fn import_zip_bytes(app: &AppHandle, bytes: Vec<u8>) -> Result<ProjectSummar
     .map_err(es)?;
     fs::write(
         dir.join("editor.json"),
-        serde_json::to_vec_pretty(&EditorMeta::default()).map_err(es)?,
+        serde_json::to_vec_pretty(&editor.unwrap_or_default()).map_err(es)?,
     )
     .map_err(es)?;
     fs::write(
