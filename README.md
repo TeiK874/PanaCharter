@@ -89,6 +89,7 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | `Del` | Delete selection |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste at the playhead |
+| `Ctrl+Shift+V` | Paste mirrored (lanes flipped left-right) at the playhead |
 | `Ctrl+A` | Select all |
 | `Space` | Play / pause |
 | `Home` / `End` | Jump to start / end |
