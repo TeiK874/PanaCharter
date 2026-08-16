@@ -358,6 +358,20 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     },
   });
 
+  const tickSoundSelect = el(
+    "select",
+    {
+      title: player.supportsTickSe
+        ? "Tick sound"
+        : "Tick sound (the native audio engine can only play the synthesized beep)",
+      disabled: !player.supportsTickSe,
+      onchange: () => player.setTickSound(tickSoundSelect.value === "se" ? "se" : "beep"),
+    },
+    el("option", { value: "beep", text: "Beep" }),
+    el("option", { value: "se", text: "Perfect SE" }),
+  );
+  tickSoundSelect.value = player.tickSound;
+
   const volumeInput = el("input", {
     type: "range",
     min: "0",
@@ -426,7 +440,17 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         onclick: () => openTempoDialog(),
       }),
     ),
-    el("div", { class: "group" }, playBtn, rateSelect, tickBtn, el("span", { class: "mini-label", text: "🔊" }), volumeInput, timeDisplay),
+    el(
+      "div",
+      { class: "group" },
+      playBtn,
+      rateSelect,
+      tickBtn,
+      tickSoundSelect,
+      el("span", { class: "mini-label", text: "🔊" }),
+      volumeInput,
+      timeDisplay,
+    ),
     el(
       "div",
       { class: "group" },

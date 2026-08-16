@@ -13,6 +13,10 @@ const PEAKS_PER_SEC = 200;
 const TICK_LOOKAHEAD = 0.3;
 const TICK_INTERVAL_MS = 100;
 const NATIVE_POLL_MS = 150;
+/** Relative to index.html — copied into ui/dist/assets by the build script. */
+const TICK_SE_URL = "assets/SE_Perfect.mp3";
+
+export type TickSound = "beep" | "se";
 
 export class Player {
   peaks: Float32Array | null = null;
@@ -21,9 +25,14 @@ export class Player {
   rate = 1;
   volume = 1;
   ticksEnabled = true;
+  /** Which tick sound to play. "se" only takes effect on the web backend (see
+   *  setTickSound) — the native mixer only knows how to synthesize the beep. */
+  tickSound: TickSound = "beep";
   onstate: () => void = () => {};
 
   private native = false;
+  private seBuffer: AudioBuffer | null = null;
+  private seLoadPromise: Promise<void> | null = null;
   private durationSec = 0;
   private startPos = 0; // paused position (both backends)
   /** Bumped whenever startPos is set on purpose — lets late async replies
@@ -67,10 +76,38 @@ export class Player {
     } catch {
       this.native = false;
     }
+    // The native mixer synthesizes its own beep and has no MP3 decode/resample path;
+    // only bother preloading the sample when the web backend will actually use it.
+    if (!this.native) void this.loadSe();
   }
 
   get loaded(): boolean {
     return this.durationSec > 0;
+  }
+
+  /** False on the native backend, which can only play the synthesized beep tick. */
+  get supportsTickSe(): boolean {
+    return !this.native;
+  }
+
+  setTickSound(sound: TickSound): void {
+    this.tickSound = sound;
+    if (sound === "se" && !this.native) void this.loadSe();
+  }
+
+  private async loadSe(): Promise<void> {
+    if (this.seBuffer) return;
+    if (!this.seLoadPromise) {
+      const ctx = this.ensureCtx();
+      this.seLoadPromise = fetch(TICK_SE_URL)
+        .then((res) => res.arrayBuffer())
+        .then((bytes) => ctx.decodeAudioData(bytes))
+        .then((buf) => {
+          this.seBuffer = buf;
+        })
+        .catch((e) => console.error("failed to load tick SE sound:", e));
+    }
+    return this.seLoadPromise;
   }
 
   get duration(): number {
@@ -410,6 +447,13 @@ export class Player {
 
   private tick(when: number): void {
     const ctx = this.ctx!;
+    if (this.tickSound === "se" && this.seBuffer) {
+      const src = ctx.createBufferSource();
+      src.buffer = this.seBuffer;
+      src.connect(this.tickGain!);
+      src.start(when);
+      return;
+    }
     const osc = ctx.createOscillator();
     const env = ctx.createGain();
     osc.frequency.value = 1660;
