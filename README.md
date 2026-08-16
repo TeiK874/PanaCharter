@@ -17,7 +17,8 @@ scores; unchanged audio/jackets are not re-sent.
   decoding (`audio.rs`).
 - `ui/` — frontend. No framework, no bundler: `tsc` emits native ES modules into
   `ui/dist/js`, `index.html`/`styles.css` are copied alongside. Tauri IPC via the
-  `withGlobalTauri` bridge.
+  `withGlobalTauri` bridge. `ui/assets/` holds static binary assets (e.g. the tick SE
+  sound) copied verbatim into `ui/dist/assets/` by the same build step.
 - Charts are stored and exchanged in the SIF1/NPPS4 JSON schema (the server's upload
   format); the server transcodes to SIF2 NoteData on upload.
 - `ui/src/convert/` — chart importers (⤓ Import in the editor, auto-detected):
@@ -100,6 +101,7 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | Click the waveform | Seek |
 | ⇆ toolbar button | Toggle vertical-scroll ⇄ horizontal-timeline layout |
 | 🔊 toolbar slider | Adjust audio playback volume |
+| 🔔 tick-sound dropdown | Switch the playback tick between a synthesized beep and a sample SE (web audio backend only) |
 | Tempo… toolbar button | Add/edit mid-song BPM changes — the grid and snapping follow each change from its time onward |
 
 Everything autosaves; press **？** in the toolbar for this list in-app.
