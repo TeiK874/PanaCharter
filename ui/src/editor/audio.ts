@@ -19,6 +19,7 @@ export class Player {
   readonly peaksPerSec = PEAKS_PER_SEC;
   playing = false;
   rate = 1;
+  volume = 1;
   ticksEnabled = true;
   onstate: () => void = () => {};
 
@@ -160,6 +161,16 @@ export class Player {
     this.ticksEnabled = enabled;
     if (this.native) {
       void this.queued(() => api.nativeSetTicks(this.noteTimes, enabled)).catch(() => {});
+    }
+  }
+
+  /** Volume of the decoded audio, 0–1. Ticks have their own fixed level and are unaffected. */
+  setVolume(volume: number): void {
+    this.volume = Math.max(0, Math.min(1, volume));
+    if (this.native) {
+      void this.queued(() => api.nativeSetVolume(this.volume)).catch(() => {});
+    } else if (this.gain) {
+      this.gain.gain.value = this.volume;
     }
   }
 
@@ -359,6 +370,7 @@ export class Player {
       // high-latency outputs
       this.ctx = new AudioContext({ latencyHint: "playback" });
       this.gain = this.ctx.createGain();
+      this.gain.gain.value = this.volume;
       this.gain.connect(this.ctx.destination);
       this.tickGain = this.ctx.createGain();
       this.tickGain.gain.value = 0.35;

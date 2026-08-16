@@ -134,6 +134,8 @@ pub struct Shared {
     pos: f64,
     playing: bool,
     rate_mult: f64,
+    /// Music gain, 0-1. Ticks have their own fixed TICK_GAIN and aren't affected.
+    volume: f64,
     ticks: Vec<f64>, // note times in seconds, sorted
     ticks_enabled: bool,
     ticks_dirty: bool,
@@ -153,6 +155,7 @@ impl NativeAudio {
                 pos: 0.0,
                 playing: false,
                 rate_mult: 1.0,
+                volume: 1.0,
                 ticks: Vec::new(),
                 ticks_enabled: true,
                 ticks_dirty: false,
@@ -211,6 +214,7 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
     };
     let mut rate_mult;
     let mut ticks_enabled;
+    let mut volume;
 
     let channels = pcm.channels.max(1) as usize;
     let frames_total = (pcm.data.len() / channels) as f64;
@@ -265,6 +269,7 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
             s.latency_sec = latency_sec;
             rate_mult = s.rate_mult;
             ticks_enabled = s.ticks_enabled;
+            volume = s.volume;
             if s.ticks_dirty {
                 s.ticks_dirty = false;
                 tick_idx = lower_bound(&s.ticks, pos / pcm.rate as f64 + 1e-6);
@@ -305,7 +310,7 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
                     for c in 0..channels {
                         let a = pcm.data[i * channels + c] as f32;
                         let b = pcm.data[(i + 1) * channels + c] as f32;
-                        let v = a + (b - a) * frac + tick_add;
+                        let v = (a + (b - a) * frac) * volume as f32 + tick_add;
                         buf[base + c] = v.clamp(-32768.0, 32767.0) as i16;
                     }
                 }
@@ -436,6 +441,11 @@ pub fn native_set_ticks(
     s.ticks.sort_by(|a, b| a.partial_cmp(b).unwrap());
     s.ticks_enabled = enabled;
     s.ticks_dirty = true;
+}
+
+#[tauri::command]
+pub fn native_set_volume(state: State<'_, NativeAudio>, volume: f64) {
+    state.inner.lock().unwrap().volume = volume.clamp(0.0, 1.0);
 }
 
 #[cfg(test)]

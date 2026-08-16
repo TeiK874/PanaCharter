@@ -332,6 +332,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     },
   });
 
+  const volumeInput = el("input", {
+    type: "range",
+    min: "0",
+    max: "100",
+    value: "100",
+    title: "Audio volume",
+    oninput: () => player.setVolume(Number(volumeInput.value) / 100),
+  });
+
   const orientBtn = el("button", {
     class: "btn",
     text: orientation === "vertical" ? "⇆ Horizontal" : "⇅ Vertical",
@@ -385,7 +394,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       el("span", { class: "mini-label", text: "offset" }),
       offsetInput,
     ),
-    el("div", { class: "group" }, playBtn, rateSelect, tickBtn, timeDisplay),
+    el("div", { class: "group" }, playBtn, rateSelect, tickBtn, el("span", { class: "mini-label", text: "🔊" }), volumeInput, timeDisplay),
     el(
       "div",
       { class: "group" },
