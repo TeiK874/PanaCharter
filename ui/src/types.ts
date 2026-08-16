@@ -42,12 +42,21 @@ export interface LastUpload {
   jacket_mtime_ms?: number | null;
 }
 
+/** A tempo change: from `time_sec` onward the grid follows `bpm` instead. */
+export interface BpmChange {
+  time_sec: number;
+  bpm: number;
+}
+
 export interface EditorMeta {
   offset_sec: number;
   snap: number;
   zoom: number;
   orientation: string;
   last_upload: LastUpload | null;
+  /** Mid-song tempo changes after the initial `Manifest.bpm` at `offset_sec`. Optional —
+   *  absent on projects saved before this existed. */
+  bpm_changes?: BpmChange[];
 }
 
 export interface ProjectSummary {

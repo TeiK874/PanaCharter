@@ -100,5 +100,6 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | Click the waveform | Seek |
 | ⇆ toolbar button | Toggle vertical-scroll ⇄ horizontal-timeline layout |
 | 🔊 toolbar slider | Adjust audio playback volume |
+| Tempo… toolbar button | Add/edit mid-song BPM changes — the grid and snapping follow each change from its time onward |
 
 Everything autosaves; press **？** in the toolbar for this list in-app.

@@ -112,6 +112,13 @@ pub struct LastUpload {
     pub jacket_mtime_ms: Option<u64>,
 }
 
+/// A tempo change: from `time_sec` onward the grid follows `bpm` instead.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct BpmChange {
+    pub time_sec: f64,
+    pub bpm: f64,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct EditorMeta {
     #[serde(default)]
@@ -124,6 +131,9 @@ pub struct EditorMeta {
     pub orientation: String,
     #[serde(default)]
     pub last_upload: Option<LastUpload>,
+    /// Mid-song tempo changes after the initial `Manifest.bpm` at `offset_sec`.
+    #[serde(default)]
+    pub bpm_changes: Vec<BpmChange>,
 }
 
 fn default_snap() -> u32 {
@@ -144,6 +154,7 @@ impl Default for EditorMeta {
             zoom: default_zoom(),
             orientation: default_orientation(),
             last_upload: None,
+            bpm_changes: Vec::new(),
         }
     }
 }
