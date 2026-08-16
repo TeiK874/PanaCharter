@@ -5,6 +5,7 @@ import { DIFFICULTIES } from "../types.js";
 import { Player } from "./audio.js";
 import { ChartDoc, allocateSlideId } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
+import { buildTempoMap } from "./tempo.js";
 import { Renderer } from "./render.js";
 import type { DrawState, Orientation } from "./render.js";
 import { openMetadataDialog } from "../views/metadata.js";
@@ -55,6 +56,8 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   const data: ProjectData = await api.projectLoad(projectId);
   const manifest = data.manifest;
   const editorMeta = data.editor;
+  // Absent on projects saved before mid-song tempo changes existed.
+  editorMeta.bpm_changes ??= [];
 
   // --- chart documents ------------------------------------------------------
   const docs = new Map<number, ChartDoc>();
@@ -87,7 +90,8 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   await player.init();
 
   const bpm = () => manifest.bpm ?? 120;
-  const gridStep = () => 60 / Math.max(1, bpm()) / snap;
+  // Rebuilt on demand — the change list is tiny, no need to cache/invalidate.
+  const tempo = () => buildTempoMap(bpm(), editorMeta.offset_sec, editorMeta.bpm_changes!);
 
   const fallbackDuration = () => {
     let last = 60;
@@ -99,9 +103,18 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   function snapTime(t: number): number {
     const clamped = Math.max(0, t);
     if (bpm() <= 0) return clamped;
-    const step = gridStep();
-    const k = Math.round((clamped - editorMeta.offset_sec) / step);
-    return Math.max(0, editorMeta.offset_sec + k * step);
+    const tm = tempo();
+    const snappedBeat = Math.round(tm.beatAt(clamped) * snap) / snap;
+    return Math.max(0, tm.timeAt(snappedBeat));
+  }
+
+  /** A sensible "one grid division" length in seconds at time `t` — always positive
+   *  (self-heals an unset/invalid BPM to a 120 fallback), for defaults like a click-placed
+   *  hold/slide's length or the arrow-key playhead step. Not used to gate whether snapping
+   *  happens at all — that's still the explicit `bpm() > 0` checks below. */
+  function localStepSec(t: number): number {
+    const tm = tempo();
+    return tm.timeAt(tm.beatAt(t) + 1 / snap) - t;
   }
 
   function syncTicks(): void {
@@ -406,6 +419,12 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       bpmInput,
       el("span", { class: "mini-label", text: "offset" }),
       offsetInput,
+      el("button", {
+        class: "btn",
+        text: "Tempo…",
+        title: "Add or edit mid-song tempo changes",
+        onclick: () => openTempoDialog(),
+      }),
     ),
     el("div", { class: "group" }, playBtn, rateSelect, tickBtn, el("span", { class: "mini-label", text: "🔊" }), volumeInput, timeDisplay),
     el(
@@ -543,6 +562,110 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         { class: "hint-list" },
         ...rows.flatMap(([k, v]) => [el("kbd", { text: k }), el("span", { text: v })]),
       ),
+    );
+  }
+
+  function openTempoDialog(): void {
+    const rowsHost = el("div", { class: "tempo-rows" });
+
+    function renderRows(): void {
+      editorMeta.bpm_changes!.sort((a, b) => a.time_sec - b.time_sec);
+      rowsHost.replaceChildren(
+        ...editorMeta.bpm_changes!.map((c) => {
+          const timeInput = el("input", {
+            type: "number",
+            step: "0.001",
+            value: String(c.time_sec),
+            title: "Time this tempo change starts, in seconds",
+            onchange: () => {
+              const v = Number(timeInput.value);
+              if (Number.isFinite(v) && v >= 0) c.time_sec = v;
+              markDirty();
+              requestDraw();
+              renderRows();
+            },
+          });
+          const bpmChangeInput = el("input", {
+            type: "number",
+            min: "1",
+            step: "0.01",
+            value: String(c.bpm),
+            title: "BPM from this point onward",
+            onchange: () => {
+              const v = Number(bpmChangeInput.value);
+              if (v >= 1) c.bpm = v;
+              markDirty();
+              requestDraw();
+            },
+          });
+          return el(
+            "div",
+            { class: "row tempo-row" },
+            timeInput,
+            bpmChangeInput,
+            el("button", {
+              class: "btn btn-ghost",
+              text: "✕",
+              title: "Remove this tempo change",
+              onclick: () => {
+                editorMeta.bpm_changes = editorMeta.bpm_changes!.filter((x) => x !== c);
+                markDirty();
+                requestDraw();
+                renderRows();
+              },
+            }),
+          );
+        }),
+      );
+    }
+    renderRows();
+
+    const startBpmInput = el("input", {
+      type: "number",
+      min: "1",
+      step: "0.01",
+      value: String(bpm()),
+      title: "BPM from the start (same as the toolbar BPM field)",
+      onchange: () => {
+        const v = Number(startBpmInput.value);
+        if (v >= 1) {
+          manifest.bpm = v;
+          bpmInput.value = String(v);
+          markDirty();
+          requestDraw();
+        }
+      },
+    });
+
+    openDialog(
+      "Tempo changes",
+      el("p", {
+        class: "dialog-body",
+        text: "The grid follows each change from its time onward — times are absolute seconds, not beats.",
+      }),
+      el(
+        "div",
+        { class: "row tempo-row" },
+        el("span", { class: "mini-label", text: `Start (offset ${editorMeta.offset_sec.toFixed(3)}s)` }),
+        startBpmInput,
+      ),
+      rowsHost,
+      el("button", {
+        class: "btn",
+        text: "+ Add at playhead",
+        title: "Insert a tempo change at the current playhead position",
+        onclick: () => {
+          const t = snapTime(player.time);
+          if (t <= editorMeta.offset_sec) {
+            toast("The playhead is at or before the start — move it later first", "error");
+            return;
+          }
+          editorMeta.bpm_changes!.push({ time_sec: t, bpm: tempo().bpmAt(t) });
+          markDirty();
+          requestDraw();
+          renderRows();
+        },
+      }),
     );
   }
 
@@ -698,6 +821,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       zoom,
       bpm: bpm(),
       offset: editorMeta.offset_sec,
+      tempoSegments: tempo().segments,
       snap,
       duration: duration(),
       notes: doc().notes,
@@ -899,15 +1023,17 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         if (!info || info.kind !== "lanes") return;
         if (gesture.resizeNote) {
           const n = gesture.resizeNote;
-          n.dur = Math.max(gridStep(), snapTime(info.t) - n.t);
+          n.dur = Math.max(localStepSec(n.t), snapTime(info.t) - n.t);
         } else {
-          // Move by an INTEGER number of grid steps so relative rhythm is
-          // preserved: on-grid notes are re-derived from the grid formula
-          // (stays bit-exact), off-grid notes (BPM-change imports) shift by
-          // the same delta instead of being quantized to the wrong grid.
+          // Move by an INTEGER number of grid divisions, counted in BEATS (via the tempo
+          // map) rather than raw seconds — that stays correct across a BPM change instead
+          // of assuming one constant step song-wide. On-grid notes are re-derived from the
+          // grid formula (stays bit-exact), off-grid notes (BPM-mismatched imports) shift
+          // by the same number of divisions instead of being quantized to the wrong grid.
+          const tm = tempo();
           const rawDt = info.t - gesture.startT;
-          const step = bpm() > 0 ? gridStep() : 0;
-          const kd = step > 0 ? Math.round(rawDt / step) : 0;
+          const hasGrid = bpm() > 0;
+          const kd = hasGrid ? Math.round((tm.beatAt(info.t) - tm.beatAt(gesture.startT)) * snap) : 0;
           // clamp the lane delta so the WHOLE selection stays in 1..9 —
           // per-note clamping compresses lanes and stacks notes
           const dl = Math.max(
@@ -917,13 +1043,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           for (const n of d.notes) {
             const o = gesture.orig.get(n.id);
             if (!o) continue;
-            if (step > 0) {
+            if (hasGrid) {
               const onGrid = snapTime(o.t) === o.t;
               if (onGrid) {
-                const k = Math.round((o.t - editorMeta.offset_sec) / step) + kd;
-                n.t = Math.max(0, editorMeta.offset_sec + k * step);
+                const beatK = Math.round(tm.beatAt(o.t) * snap) + kd;
+                n.t = Math.max(0, tm.timeAt(beatK / snap));
               } else {
-                n.t = Math.max(0, o.t + kd * step);
+                n.t = Math.max(0, tm.timeAt(tm.beatAt(o.t) + kd / snap));
               }
             } else {
               n.t = Math.max(0, o.t + rawDt);
@@ -955,7 +1081,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     const d = doc();
     switch (gesture.type) {
       case "place-hold": {
-        if (gesture.note.dur <= 0) gesture.note.dur = gridStep();
+        if (gesture.note.dur <= 0) gesture.note.dur = localStepSec(gesture.note.t);
         d.selection.clear();
         d.selection.add(gesture.note.id);
         d.commit(gesture.pre);
@@ -1181,13 +1307,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       case "ArrowUp":
       case "ArrowLeft":
         e.preventDefault();
-        player.seek(snapTime(player.time - gridStep() * 1.001));
+        player.seek(snapTime(player.time - localStepSec(player.time) * 1.001));
         requestDraw();
         break;
       case "ArrowDown":
       case "ArrowRight":
         e.preventDefault();
-        player.seek(snapTime(player.time + gridStep() * 1.001));
+        player.seek(snapTime(player.time + localStepSec(player.time) * 1.001));
         requestDraw();
         break;
     }

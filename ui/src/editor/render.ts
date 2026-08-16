@@ -10,6 +10,9 @@ export interface ViewState {
   zoom: number;
   bpm: number;
   offset: number;
+  /** Tempo segments covering the whole song (always at least one entry) — the grid follows
+   *  these instead of the flat bpm/offset above whenever there's more than one. */
+  tempoSegments: { startSec: number; startBeat: number; bpm: number }[];
   /** Subdivisions per beat for the snap grid. */
   snap: number;
   duration: number;
@@ -69,6 +72,10 @@ const COLORS = {
    *  ACTIVE_SLIDE_RING_WIDTH) so the two states read as clearly different at a glance. */
   slideEditRing: "#2be8ff",
   selectRing: "#ffffff",
+  /** Tempo-change marker line + BPM label chip — orange, unused by any note/selection
+   *  color, drawn over the grid AND the waveform so a BPM change is visible either way. */
+  tempoMarker: "#ffab49",
+  tempoMarkerText: "#14141f",
 };
 
 const SELECT_RING_WIDTH = 1.6;
@@ -206,6 +213,7 @@ export class Renderer {
     this.drawLanes(s);
     this.drawGrid(s);
     this.drawGutter(s);
+    this.drawTempoMarkers(s);
     this.drawSimLines(s);
     this.drawSlideChains(s);
 
@@ -308,37 +316,47 @@ export class Renderer {
   }
 
   private drawGrid(s: DrawState): void {
-    if (s.bpm <= 0) return;
-    const beat = 60 / s.bpm;
-    const sub = beat / Math.max(1, s.snap);
+    const segments = s.tempoSegments.length
+      ? s.tempoSegments
+      : [{ startSec: s.offset, startBeat: 0, bpm: s.bpm }];
     const t0 = s.scroll;
     const t1 = s.scroll + this.timeSpan(s);
 
-    if (sub * s.zoom >= 5 && s.snap > 1) {
-      let k = Math.ceil((t0 - s.offset) / sub - 1e-6);
-      for (; s.offset + k * sub <= t1; k++) {
-        if (((k % s.snap) + s.snap) % s.snap === 0) continue; // beat line, drawn below
-        this.timeLine(s.offset + k * sub, s, COLORS.sub, 1);
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (seg.bpm <= 0) continue;
+      const segEnd = i + 1 < segments.length ? segments[i + 1].startSec : Infinity;
+      if (segEnd < t0 || seg.startSec > t1) continue; // outside the visible window
+      const lo = Math.max(t0, seg.startSec);
+      const hi = Math.min(t1, segEnd);
+      const beat = 60 / seg.bpm;
+      const sub = beat / Math.max(1, s.snap);
+
+      if (sub * s.zoom >= 5 && s.snap > 1) {
+        let k = Math.ceil((lo - seg.startSec) / sub - 1e-6);
+        for (; seg.startSec + k * sub <= hi; k++) {
+          if (((k % s.snap) + s.snap) % s.snap === 0) continue; // beat line, drawn below
+          this.timeLine(seg.startSec + k * sub, s, COLORS.sub, 1);
+        }
       }
-    }
-    if (beat * s.zoom >= 4) {
-      let k = Math.ceil((t0 - s.offset) / beat - 1e-6);
-      for (; s.offset + k * beat <= t1; k++) {
-        const measure = ((k % 4) + 4) % 4 === 0;
-        this.timeLine(
-          s.offset + k * beat,
-          s,
-          measure ? COLORS.measure : COLORS.beat,
-          measure ? 1.5 : 1,
-        );
-        if (measure && beat * s.zoom * 4 > 40) {
-          const { ctx } = this;
-          ctx.fillStyle = COLORS.label;
-          ctx.font = "10px ui-monospace, monospace";
-          const p = this.tpx(s.offset + k * beat, s);
-          const label = `${Math.floor(k / 4) + 1}`;
-          if (s.orientation === "vertical") ctx.fillText(label, GUTTER + 4, p - 3);
-          else ctx.fillText(label, p + 3, GUTTER + 11);
+      if (beat * s.zoom >= 4) {
+        let k = Math.ceil((lo - seg.startSec) / beat - 1e-6);
+        for (; seg.startSec + k * beat <= hi; k++) {
+          // Measure numbering counts continuously across tempo changes via startBeat,
+          // so it doesn't reset or jump at a BPM change.
+          const globalBeat = Math.round(seg.startBeat) + k;
+          const measure = ((globalBeat % 4) + 4) % 4 === 0;
+          const t = seg.startSec + k * beat;
+          this.timeLine(t, s, measure ? COLORS.measure : COLORS.beat, measure ? 1.5 : 1);
+          if (measure && beat * s.zoom * 4 > 40) {
+            const { ctx } = this;
+            ctx.fillStyle = COLORS.label;
+            ctx.font = "10px ui-monospace, monospace";
+            const p = this.tpx(t, s);
+            const label = `${Math.floor(globalBeat / 4) + 1}`;
+            if (s.orientation === "vertical") ctx.fillText(label, GUTTER + 4, p - 3);
+            else ctx.fillText(label, p + 3, GUTTER + 11);
+          }
         }
       }
     }
@@ -405,6 +423,52 @@ export class Renderer {
       ctx.lineTo(this.w, GUTTER + 0.5);
     }
     ctx.stroke();
+  }
+
+  /** A dashed line + BPM label chip at each tempo change, drawn over the grid AND the
+   *  gutter/waveform (called right after drawGutter) so the change is visible either way. */
+  private drawTempoMarkers(s: DrawState): void {
+    if (s.tempoSegments.length < 2) return;
+    const { ctx } = this;
+    const o = s.orientation;
+    const t0 = s.scroll - 1;
+    const t1 = s.scroll + this.timeSpan(s) + 1;
+
+    for (let i = 1; i < s.tempoSegments.length; i++) {
+      const seg = s.tempoSegments[i];
+      if (seg.startSec < t0 || seg.startSec > t1) continue;
+      const p = Math.round(this.tpx(seg.startSec, s)) + 0.5;
+
+      ctx.strokeStyle = COLORS.tempoMarker;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      if (o === "vertical") {
+        ctx.moveTo(0, p);
+        ctx.lineTo(this.w, p);
+      } else {
+        ctx.moveTo(p, 0);
+        ctx.lineTo(p, this.h);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const label = `♩${Math.round(seg.bpm * 100) / 100}`;
+      ctx.font = "700 10px ui-monospace, monospace";
+      const textW = ctx.measureText(label).width;
+      const padX = 4;
+      const boxW = textW + padX * 2;
+      const boxH = 14;
+      const bx = o === "vertical" ? 2 : Math.min(p + 3, this.w - boxW - 2);
+      const by = o === "vertical" ? Math.min(Math.max(p - boxH - 1, GUTTER + 1), this.h - boxH - 1) : GUTTER + 2;
+
+      ctx.beginPath();
+      roundRect(ctx, bx, by, boxW, boxH, 3);
+      ctx.fillStyle = COLORS.tempoMarker;
+      ctx.fill();
+      ctx.fillStyle = COLORS.tempoMarkerText;
+      ctx.fillText(label, bx + padX, by + boxH - 4);
+    }
   }
 
   private drawSimLines(s: DrawState): void {
