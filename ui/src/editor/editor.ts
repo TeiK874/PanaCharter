@@ -3,7 +3,7 @@ import { attempt, confirmDialog, el, fmtTime, openDialog, pickFile, toast } from
 import type { ProjectData, SifNote } from "../types.js";
 import { DIFFICULTIES } from "../types.js";
 import { Player } from "./audio.js";
-import { ChartDoc } from "./chart.js";
+import { ChartDoc, allocateSlideId } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
 import { Renderer } from "./render.js";
 import type { DrawState, Orientation } from "./render.js";
@@ -22,6 +22,15 @@ type Gesture =
   | { type: "none" }
   | { type: "place-hold"; pre: string; note: Note }
   | {
+      type: "place-slide";
+      pre: string;
+      note: Note;
+      slideId: number;
+      /** True if this note was already the open chain tail when the click started — a
+       *  plain click (no drag) then toggles it back to select mode instead of reopening it. */
+      wasActive: boolean;
+    }
+  | {
       type: "move";
       pre: string;
       startT: number;
@@ -31,6 +40,9 @@ type Gesture =
       maxLane: number;
       part: "head" | "tail";
       resizeNote: Note | null;
+      /** True if this is a lone, already-selected, not-yet-open slide chain tail — a
+       *  plain click (no net movement) then opens it for editing instead of no-op'ing. */
+      slideTogglePending: boolean;
     }
   | { type: "box"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { type: "pan"; startScroll: number; startPos: number }
@@ -64,7 +76,12 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   let ghost: DrawState["ghost"] = null;
   let needsDraw = true;
   let disposed = false;
-  let clipboard: { dt: number; lane: number; kind: NoteKind; dur: number }[] = [];
+  let clipboard: { dt: number; lane: number; kind: NoteKind; dur: number; slideId?: number }[] = [];
+  // Slide chain currently being extended by sequential clicks of the slide tool.
+  let activeSlide: { slideId: number; lastId: number; lastT: number; lastLane: number } | null = null;
+  function endActiveSlide(): void {
+    activeSlide = null;
+  }
 
   const player = new Player();
   await player.init();
@@ -91,7 +108,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     const times: number[] = [];
     for (const n of doc().notes) {
       times.push(n.t);
-      if (n.kind === "hold") times.push(n.t + n.dur);
+      if (n.kind === "hold" || (n.kind === "slide" && n.dur > 0)) times.push(n.t + n.dur);
     }
     times.sort((a, b) => a - b);
     player.setNoteTimes(times);
@@ -191,6 +208,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           ? `${d.name} — right-click to delete this difficulty`
           : `Create ${d.name} chart`,
         onclick: () => {
+          endActiveSlide();
           if (!docs.has(lvl)) {
             docs.set(lvl, new ChartDoc());
             hookDoc(docs.get(lvl)!);
@@ -205,6 +223,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           e.preventDefault();
           if (!docs.has(lvl)) return;
           if (!(await confirmDialog(`Delete the ${d.name} chart? This cannot be undone.`))) return;
+          endActiveSlide();
           docs.delete(lvl);
           manifest.levels = manifest.levels.filter((x) => x.level !== lvl);
           if (level === lvl) level = docs.size ? Math.min(...docs.keys()) : (docs.set(1, hookDoc(new ChartDoc())), 1);
@@ -234,6 +253,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   }
   function setTool(t: Tool): void {
     tool = t;
+    if (t !== "slide") endActiveSlide();
     for (const [k, b] of toolButtons) b.classList.toggle("active", k === t);
     ghost = null;
     requestDraw();
@@ -353,6 +373,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       toolBtn("tap", "●", "Tap", "2"),
       toolBtn("hold", "▮", "Hold — drag to set length", "3"),
       toolBtn("star", "★", "Star", "4"),
+      toolBtn("slide", "◆", "Slide — click points across lanes, Esc ends the chain", "5"),
     ),
     el(
       "div",
@@ -475,14 +496,17 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
   function showHelp(): void {
     const rows: [string, string][] = [
-      ["1–4", "Select / Tap / Hold / Star tool"],
+      ["1–5", "Select / Tap / Hold / Star / Slide tool"],
       ["Click", "Place note (drag for hold length)"],
+      ["Slide: click, click, …", "Chain points across lanes · drag the last point for a hold end"],
+      ["Esc (Slide tool)", "End the current slide chain"],
       ["Drag note", "Move · drag a hold's tail to resize"],
       ["Right-click", "Delete note"],
       ["Shift+click", "Add to selection"],
       ["Del", "Delete selection"],
       ["Ctrl+Z / Ctrl+Y", "Undo / redo"],
       ["Ctrl+C / X / V", "Copy / cut / paste at playhead"],
+      ["Ctrl+Shift+V", "Paste mirrored (lanes flipped) at playhead"],
       ["Ctrl+A", "Select all"],
       ["Space", "Play / pause"],
       ["Home / End", "Jump to start / end"],
@@ -588,13 +612,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     ) {
       return;
     }
+    endActiveSlide();
     d.edit(() => {
-      d.notes.length = 0;
+      d.notes = ChartDoc.fromSif(result.notes).notes;
       d.selection.clear();
-      for (const n of result.notes) {
-        const kind = n.effect === 3 && n.effect_value > 0 ? "hold" : n.effect === 4 ? "star" : "tap";
-        d.place(n.timing_sec, n.position, kind, kind === "hold" ? n.effect_value : 0);
-      }
     });
     const warnings = [...result.warnings];
     if (result.bpm && result.bpm !== manifest.bpm) {
@@ -662,12 +683,18 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       cursor: player.displayTime,
       peaks: player.peaks,
       peaksPerSec: player.peaksPerSec,
-      ghost,
+      ghost: gesture.type === "place-slide" ? null : ghost,
       pendingHold:
         gesture.type === "place-hold"
           ? { t: gesture.note.t, lane: gesture.note.lane, dur: gesture.note.dur }
           : null,
       box: gesture.type === "box" ? gesture : null,
+      activeSlideFrom:
+        tool === "slide" && gesture.type === "none" && activeSlide
+          ? { t: activeSlide.lastT, lane: activeSlide.lastLane }
+          : null,
+      activeSlideEditId:
+        gesture.type === "place-slide" ? gesture.note.id : tool === "slide" && activeSlide ? activeSlide.lastId : null,
     };
   }
 
@@ -708,6 +735,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
     if (e.button === 2) {
       if (hit) {
+        endActiveSlide();
         d.edit(() => {
           d.remove(d.selection.has(hit.note.id) ? [...d.selection] : [hit.note.id]);
         });
@@ -718,12 +746,35 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
     if (hit) {
       if (e.shiftKey) {
+        endActiveSlide();
         if (d.selection.has(hit.note.id)) d.selection.delete(hit.note.id);
         else d.selection.add(hit.note.id);
         requestDraw();
         updateStatus();
         return;
       }
+
+      const eligibleTail =
+        tool === "slide" &&
+        hit.note.kind === "slide" &&
+        hit.note.dur === 0 &&
+        d.selection.size === 1 &&
+        d.selection.has(hit.note.id) &&
+        d.isSlideChainTail(hit.note);
+
+      // Clicking a slide chain tail that's already open for editing lets you drag it
+      // into a hold, or click again (no drag) to close it. Once it becomes a hold it
+      // can't reopen — the chain is done, matching the server's "a hold ends the run".
+      // An eligible tail that ISN'T open yet falls through to the normal move gesture
+      // below instead — a drag just repositions it like any other note; only a plain
+      // click with no net movement opens it (handled in finishGesture).
+      if (eligibleTail && activeSlide && activeSlide.lastId === hit.note.id) {
+        gesture = { type: "place-slide", pre: d.begin(), note: hit.note, slideId: hit.note.slideId!, wasActive: true };
+        requestDraw();
+        return;
+      }
+
+      endActiveSlide();
       if (!d.selection.has(hit.note.id)) {
         d.selection.clear();
         d.selection.add(hit.note.id);
@@ -742,6 +793,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         startT: info.t,
         startLane: info.lane,
         orig,
+        slideTogglePending: eligibleTail,
         minLane,
         maxLane,
         part: hit.part === "tail" ? "tail" : "head",
@@ -753,6 +805,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     }
 
     if (tool === "select") {
+      endActiveSlide();
       gesture = { type: "box", x0: x, y0: y, x1: x, y1: y, additive: e.shiftKey };
       if (!e.shiftKey) {
         d.selection.clear();
@@ -768,6 +821,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       const pre = d.begin();
       const note = d.place(t, info.lane, "hold", 0);
       gesture = { type: "place-hold", pre, note };
+    } else if (tool === "slide") {
+      // activeSlide only ever points at an open (dur === 0) tail — see finishGesture's
+      // "place-slide" case — so there's never a stale hold tail to undo here.
+      const pre = d.begin();
+      const slideId = activeSlide ? activeSlide.slideId : allocateSlideId();
+      const note = d.place(t, info.lane, "slide", 0, slideId);
+      d.selection.clear();
+      d.selection.add(note.id);
+      gesture = { type: "place-slide", pre, note, slideId, wasActive: false };
     } else {
       d.edit(() => {
         const note = d.place(t, info.lane, tool as NoteKind);
@@ -798,6 +860,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         return;
       }
       case "place-hold": {
+        if (info) {
+          gesture.note.dur = Math.max(0, snapTime(info.t) - gesture.note.t);
+        }
+        requestDraw();
+        return;
+      }
+      case "place-slide": {
         if (info) {
           gesture.note.dur = Math.max(0, snapTime(info.t) - gesture.note.t);
         }
@@ -870,9 +939,38 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         d.commit(gesture.pre);
         break;
       }
+      case "place-slide": {
+        // no forced minimum duration — a slide point defaults to a plain link, not a hold
+        d.selection.clear();
+        d.selection.add(gesture.note.id);
+        d.commit(gesture.pre);
+        if (gesture.note.dur > 0) {
+          // dragged into a hold — the chain is done here, regardless of prior state
+          endActiveSlide();
+        } else if (gesture.wasActive) {
+          // a plain click on the already-open tail toggles it back to select mode
+          endActiveSlide();
+        } else {
+          activeSlide = {
+            slideId: gesture.slideId,
+            lastId: gesture.note.id,
+            lastT: gesture.note.t,
+            lastLane: gesture.note.lane,
+          };
+        }
+        break;
+      }
       case "move": {
         if (!gesture.resizeNote) d.resolveCollisions(new Set(gesture.orig.keys()));
         d.commit(gesture.pre);
+        if (gesture.slideTogglePending) {
+          const [[id, orig]] = gesture.orig;
+          const n = d.byId(id);
+          if (n && n.t === orig.t && n.lane === orig.lane) {
+            // a plain click, no drag — open the chain for editing instead of no-op'ing
+            activeSlide = { slideId: n.slideId!, lastId: n.id, lastT: n.t, lastLane: n.lane };
+          }
+        }
         break;
       }
       case "box": {
@@ -963,11 +1061,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     }
     if (ctrl && e.key.toLowerCase() === "z") {
       e.preventDefault();
+      endActiveSlide();
       e.shiftKey ? d.redo() : d.undo();
       return;
     }
     if (ctrl && e.key.toLowerCase() === "y") {
       e.preventDefault();
+      endActiveSlide();
       d.redo();
       return;
     }
@@ -987,7 +1087,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       const sel = d.selectedNotes();
       if (!sel.length) return;
       const base = Math.min(...sel.map((n) => n.t));
-      clipboard = sel.map((n) => ({ dt: n.t - base, lane: n.lane, kind: n.kind, dur: n.dur }));
+      clipboard = sel.map((n) => ({ dt: n.t - base, lane: n.lane, kind: n.kind, dur: n.dur, slideId: n.slideId }));
       if (e.key.toLowerCase() === "x") d.edit(() => d.remove([...d.selection]));
       toast(`${clipboard.length} note${clipboard.length > 1 ? "s" : ""} ${e.key === "x" ? "cut" : "copied"}`);
       return;
@@ -995,6 +1095,8 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     if (ctrl && e.key.toLowerCase() === "v") {
       if (!clipboard.length) return;
       const base = snapTime(player.time);
+      // Distinct source chains get fresh ids so pasted copies don't merge into the originals.
+      const slideIdMap = new Map<number, number>();
       d.edit(() => {
         d.selection.clear();
         for (const c of clipboard) {
@@ -1005,7 +1107,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           if(shift) {
             lane = 10 - lane;
           }
-          const n = d.place(t, lane, c.kind, c.dur);
+          let slideId: number | undefined;
+          if (c.kind === "slide" && c.slideId !== undefined) {
+            slideId = slideIdMap.get(c.slideId);
+            if (slideId === undefined) {
+              slideId = allocateSlideId();
+              slideIdMap.set(c.slideId, slideId);
+            }
+          }
+          const n = d.place(t, lane, c.kind, c.dur, slideId);
           d.selection.add(n.id);
         }
       });
@@ -1024,11 +1134,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       case "4":
         setTool("star");
         break;
+      case "5":
+        setTool("slide");
+        break;
       case "Delete":
       case "Backspace":
         if (d.selection.size) d.edit(() => d.remove([...d.selection]));
         break;
       case "Escape":
+        endActiveSlide();
         d.selection.clear();
         requestDraw();
         updateStatus();

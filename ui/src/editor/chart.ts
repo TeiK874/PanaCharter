@@ -1,6 +1,6 @@
 import type { SifNote } from "../types.js";
 
-export type NoteKind = "tap" | "hold" | "star";
+export type NoteKind = "tap" | "hold" | "star" | "slide";
 
 export interface Note {
   id: number;
@@ -10,8 +10,13 @@ export interface Note {
   /** Lane 1–9, right-to-left (1 = rightmost, matching the game). */
   lane: number;
   kind: NoteKind;
-  /** Hold duration, seconds (0 for tap/star). */
+  /** Hold duration, seconds (0 for tap/star). For a slide note, only meaningful on the
+   *  chronologically LAST member of its chain: > 0 means the slide settles into a hold
+   *  there (effect 13) instead of ending as a plain point (effect 11/12). */
   dur: number;
+  /** Slide chain id (kind === "slide" only). Notes sharing a slideId link together in
+   *  time order, each link crossing lanes — see allocateSlideId(). */
+  slideId?: number;
 }
 
 export interface ChartIssue {
@@ -21,6 +26,13 @@ export interface ChartIssue {
 }
 
 let nextId = 1;
+// 1 is SIF1's "not chained" default, so chain ids must start above it.
+let nextSlideId = 2;
+
+/** Allocates a fresh slide chain id, always > 1 so it never reads as "unchained". */
+export function allocateSlideId(): number {
+  return nextSlideId++;
+}
 
 const EPS = 1e-9;
 
@@ -34,8 +46,21 @@ export class ChartDoc {
 
   static fromSif(sif: SifNote[]): ChartDoc {
     const doc = new ChartDoc();
+    // Slide chain grouping: notes_level > 1 groups effect 11/12/13 notes together, same
+    // rule the server's transcoder uses (chart.rs: notes_level <= 1 is SIF1's own
+    // "not chained" default and must not be treated as a group).
+    const chains = new Map<number, SifNote[]>();
     for (const n of sif) {
       if (n.position < 1 || n.position > 9 || n.timing_sec < 0) continue;
+      if (n.effect === 11 || n.effect === 12 || n.effect === 13) {
+        const level = n.notes_level ?? 1;
+        if (level > 1) {
+          let group = chains.get(level);
+          if (!group) chains.set(level, (group = []));
+          group.push(n);
+          continue;
+        }
+      }
       let kind: NoteKind = "tap";
       let dur = 0;
       if (n.effect === 3 && n.effect_value > 0) {
@@ -46,18 +71,58 @@ export class ChartDoc {
       }
       doc.notes.push({ id: nextId++, t: n.timing_sec, lane: n.position, kind, dur });
     }
+    for (const group of chains.values()) {
+      if (group.length < 2) {
+        // A lone slide can't be a slider — it stays a plain tap, same as the server.
+        for (const n of group) doc.notes.push({ id: nextId++, t: n.timing_sec, lane: n.position, kind: "tap", dur: 0 });
+        continue;
+      }
+      const ordered = [...group].sort((a, b) => a.timing_sec - b.timing_sec);
+      const slideId = allocateSlideId();
+      ordered.forEach((n, i) => {
+        const isLast = i === ordered.length - 1;
+        const dur = isLast && n.effect === 13 && n.effect_value > 0 ? n.effect_value : 0;
+        doc.notes.push({ id: nextId++, t: n.timing_sec, lane: n.position, kind: "slide", dur, slideId });
+      });
+    }
     doc.sort();
     return doc;
   }
 
   toSif(): SifNote[] {
     this.sort();
-    return this.notes.map((n) => ({
-      timing_sec: n.t,
-      position: n.lane,
-      effect: n.kind === "hold" ? 3 : n.kind === "star" ? 4 : 1,
-      effect_value: n.kind === "hold" ? n.dur : 0,
-    }));
+    // Only the chronologically last member of a chain may end in a hold (effect 13);
+    // every other member is a plain slide point (effect 11).
+    const chainTailIds = new Set<number>();
+    const chains = new Map<number, Note[]>();
+    for (const n of this.notes) {
+      if (n.kind !== "slide" || n.slideId === undefined) continue;
+      let group = chains.get(n.slideId);
+      if (!group) chains.set(n.slideId, (group = []));
+      group.push(n);
+    }
+    for (const group of chains.values()) {
+      const ordered = [...group].sort((a, b) => a.t - b.t);
+      chainTailIds.add(ordered[ordered.length - 1].id);
+    }
+    return this.notes.map((n) => {
+      if (n.kind === "slide") {
+        const isHoldEnd = chainTailIds.has(n.id) && n.dur > 0;
+        return {
+          timing_sec: n.t,
+          position: n.lane,
+          effect: isHoldEnd ? 13 : 11,
+          effect_value: isHoldEnd ? n.dur : 0,
+          notes_level: n.slideId,
+        };
+      }
+      return {
+        timing_sec: n.t,
+        position: n.lane,
+        effect: n.kind === "hold" ? 3 : n.kind === "star" ? 4 : 1,
+        effect_value: n.kind === "hold" ? n.dur : 0,
+      };
+    });
   }
 
   private sort(): void {
@@ -122,12 +187,19 @@ export class ChartDoc {
   }
 
   /** Place a note; anything already on that exact time+lane is replaced. */
-  place(t: number, lane: number, kind: NoteKind, dur = 0): Note {
+  place(t: number, lane: number, kind: NoteKind, dur = 0, slideId?: number): Note {
     const clash = this.noteAt(t, lane);
     if (clash) this.notes.splice(this.notes.indexOf(clash), 1);
-    const note: Note = { id: nextId++, t, lane, kind, dur };
+    const note: Note = { id: nextId++, t, lane, kind, dur, slideId };
     this.notes.push(note);
     return note;
+  }
+
+  /** True if `note` is the chronologically last member of its slide chain — the only
+   *  point that may end the chain in a hold, or be reopened to add another link. */
+  isSlideChainTail(note: Note): boolean {
+    if (note.kind !== "slide" || note.slideId === undefined) return false;
+    return !this.notes.some((n) => n.slideId === note.slideId && n.id !== note.id && n.t > note.t);
   }
 
   remove(ids: Iterable<number>): void {
@@ -187,7 +259,7 @@ export class ChartDoc {
     for (const [lane, list] of byLane) {
       for (let i = 0; i < list.length; i++) {
         const cur = list[i];
-        if (cur.kind !== "hold") continue;
+        if (cur.kind !== "hold" && !(cur.kind === "slide" && cur.dur > 0)) continue;
         const end = cur.t + cur.dur;
         for (let j = i + 1; j < list.length && list[j].t < end + EPS; j++) {
           const next = list[j];
@@ -218,6 +290,43 @@ export class ChartDoc {
             }`,
             severity: a.kind !== b.kind ? "error" : "warning",
             noteId: b.id,
+          });
+        }
+      }
+    }
+    // slide chains: a lone point can't slide, and adjacent points sharing a lane
+    // silently fail to link (the server skips the link rather than lying about it)
+    const slideGroups = new Map<number, Note[]>();
+    for (const n of sorted) {
+      if (n.kind !== "slide" || n.slideId === undefined) continue;
+      let group = slideGroups.get(n.slideId);
+      if (!group) slideGroups.set(n.slideId, (group = []));
+      group.push(n);
+    }
+    for (const group of slideGroups.values()) {
+      if (group.length < 2) {
+        const n = group[0];
+        out.push({
+          message: `Slide at ${n.t.toFixed(3)}s has no chain partner and will play as a plain tap`,
+          severity: "warning",
+          noteId: n.id,
+        });
+        continue;
+      }
+      const ordered = [...group].sort((a, b) => a.t - b.t);
+      for (let i = 0; i < ordered.length - 1; i++) {
+        if (ordered[i].lane === ordered[i + 1].lane) {
+          out.push({
+            message: `Slide chain: points at ${ordered[i].t.toFixed(3)}s and ${ordered[i + 1].t.toFixed(3)}s share lane ${ordered[i].lane} and won't connect`,
+            severity: "warning",
+            noteId: ordered[i + 1].id,
+          });
+        }
+        if (ordered[i].dur > 0) {
+          out.push({
+            message: `Slide chain: point at ${ordered[i].t.toFixed(3)}s ends in a hold but isn't the last point — only the final point can`,
+            severity: "warning",
+            noteId: ordered[i].id,
           });
         }
       }

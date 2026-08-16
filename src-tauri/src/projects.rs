@@ -29,7 +29,8 @@ fn es<E: std::fmt::Display>(e: E) -> String {
 // ---------------------------------------------------------------------------
 
 /// One note in the SIF1/NPPS4 upload schema (§4a). Lane `position` is 1–9
-/// right-to-left; `effect` 1=tap, 3=hold (+`effect_value` duration), 4=star.
+/// right-to-left; `effect` 1=tap, 3=hold (+`effect_value` duration), 4=star,
+/// 11/12=slide, 13=slide ending in a hold (+`effect_value` duration).
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SifNote {
     pub timing_sec: f64,
@@ -39,12 +40,20 @@ pub struct SifNote {
     pub effect: u32,
     #[serde(default)]
     pub effect_value: f64,
+    /// Slide chain id (effect 11/12/13 only): notes sharing a value > 1 chain together in
+    /// time order. 0 (the wire default) reads the same as SIF1's own "not chained" 1.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub notes_level: u32,
 }
 
 /// Accept `5` and `5.0` alike — SIF1 charts in the wild are sloppy about this.
 fn de_num_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let v = f64::deserialize(d)?;
     Ok(v as u32)
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -24,6 +24,11 @@ export interface DrawState extends ViewState {
   ghost: { t: number; lane: number; kind: NoteKind } | null;
   pendingHold: { t: number; lane: number; dur: number } | null;
   box: { x0: number; y0: number; x1: number; y1: number } | null;
+  /** Tail of the slide chain being extended, if any — previewed as a dashed line to the ghost. */
+  activeSlideFrom: { t: number; lane: number } | null;
+  /** id of the note currently in slide-edit mode (open for extending/hold-ending), if any —
+   *  drawn with a distinct ring color so slide-edit mode reads differently from plain selection. */
+  activeSlideEditId: number | null;
 }
 
 export interface NoteHit {
@@ -54,7 +59,20 @@ const COLORS = {
   star: "#ffcf5e",
   starRim: "#c69a2e",
   sim: "rgba(236, 234, 244, 0.35)",
+  slide: "#b48cff",
+  slideRim: "#7c56c9",
+  slideBody: "rgba(180, 140, 255, 0.30)",
+  slideChain: "rgba(180, 140, 255, 0.55)",
+  slidePreview: "rgba(180, 140, 255, 0.35)",
+  /** Selection ring for the note currently open in slide-edit mode — a hue nothing else on
+   *  the canvas uses, and drawn much thicker than the plain selection ring (see
+   *  ACTIVE_SLIDE_RING_WIDTH) so the two states read as clearly different at a glance. */
+  slideEditRing: "#2be8ff",
+  selectRing: "#ffffff",
 };
+
+const SELECT_RING_WIDTH = 1.6;
+const ACTIVE_SLIDE_RING_WIDTH = 4;
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -145,7 +163,7 @@ export class Renderer {
     for (let i = notes.length - 1; i >= 0; i--) {
       const n = notes[i];
       const head = this.notePoint(n.t, n.lane, s);
-      if (n.kind === "hold") {
+      if (n.kind === "hold" || (n.kind === "slide" && n.dur > 0)) {
         const tail = this.notePoint(n.t + n.dur, n.lane, s);
         if (dist(x, y, tail.x, tail.y) <= r) return { note: n, part: "tail" };
         if (dist(x, y, head.x, head.y) <= r) return { note: n, part: "head" };
@@ -189,6 +207,7 @@ export class Renderer {
     this.drawGrid(s);
     this.drawGutter(s);
     this.drawSimLines(s);
+    this.drawSlideChains(s);
 
     const t0 = s.scroll - 2;
     const t1 = s.scroll + this.timeSpan(s) + 2;
@@ -211,6 +230,19 @@ export class Renderer {
         false,
         0.4,
       );
+    }
+
+    if (s.activeSlideFrom && s.ghost) {
+      const from = this.notePoint(s.activeSlideFrom.t, s.activeSlideFrom.lane, s);
+      const to = this.notePoint(s.ghost.t, s.ghost.lane, s);
+      ctx.strokeStyle = COLORS.slidePreview;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     this.drawPlayhead(s);
@@ -403,12 +435,42 @@ export class Renderer {
     }
   }
 
+  private drawSlideChains(s: DrawState): void {
+    const { ctx } = this;
+    const t0 = s.scroll - 2;
+    const t1 = s.scroll + this.timeSpan(s) + 2;
+    const groups = new Map<number, Note[]>();
+    for (const n of s.notes) {
+      if (n.kind !== "slide" || n.slideId === undefined) continue;
+      if (n.t < t0 || n.t > t1) continue;
+      const g = groups.get(n.slideId);
+      if (g) g.push(n);
+      else groups.set(n.slideId, [n]);
+    }
+    ctx.strokeStyle = COLORS.slideChain;
+    ctx.lineWidth = 3;
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const ordered = [...group].sort((a, b) => a.t - b.t);
+      ctx.beginPath();
+      ordered.forEach((n, i) => {
+        const p = this.notePoint(n.t, n.lane, s);
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      });
+      ctx.stroke();
+    }
+  }
+
   private drawNote(n: Note, s: DrawState, selected: boolean, alpha: number): void {
     const { ctx } = this;
     const o = s.orientation;
     const r = this.noteRadius(o);
     const head = this.notePoint(n.t, n.lane, s);
     ctx.globalAlpha = alpha;
+    const editing = n.id === s.activeSlideEditId;
+    const ring = editing ? COLORS.slideEditRing : selected ? COLORS.selectRing : null;
+    const ringWidth = editing ? ACTIVE_SLIDE_RING_WIDTH : SELECT_RING_WIDTH;
 
     if (n.kind === "hold") {
       const tail = this.notePoint(n.t + n.dur, n.lane, s);
@@ -421,12 +483,27 @@ export class Renderer {
         roundRect(ctx, Math.min(head.x, tail.x), head.y - bw / 2, Math.abs(tail.x - head.x), bw, bw / 2);
       }
       ctx.fill();
-      circle(ctx, tail.x, tail.y, r * 0.72, COLORS.hold, COLORS.holdRim, selected);
-      circle(ctx, head.x, head.y, r, COLORS.hold, COLORS.holdRim, selected);
+      circle(ctx, tail.x, tail.y, r * 0.72, COLORS.hold, COLORS.holdRim, ring, ringWidth);
+      circle(ctx, head.x, head.y, r, COLORS.hold, COLORS.holdRim, ring, ringWidth);
     } else if (n.kind === "star") {
-      star(ctx, head.x, head.y, r * 1.15, COLORS.star, COLORS.starRim, selected);
+      star(ctx, head.x, head.y, r * 1.15, COLORS.star, COLORS.starRim, ring, ringWidth);
+    } else if (n.kind === "slide") {
+      if (n.dur > 0) {
+        const tail = this.notePoint(n.t + n.dur, n.lane, s);
+        ctx.fillStyle = COLORS.slideBody;
+        ctx.beginPath();
+        const bw = r * 1.1;
+        if (o === "vertical") {
+          roundRect(ctx, head.x - bw / 2, Math.min(head.y, tail.y), bw, Math.abs(tail.y - head.y), bw / 2);
+        } else {
+          roundRect(ctx, Math.min(head.x, tail.x), head.y - bw / 2, Math.abs(tail.x - head.x), bw, bw / 2);
+        }
+        ctx.fill();
+        circle(ctx, tail.x, tail.y, r * 0.72, COLORS.slide, COLORS.slideRim, ring, ringWidth);
+      }
+      diamond(ctx, head.x, head.y, r, COLORS.slide, COLORS.slideRim, ring, ringWidth);
     } else {
-      circle(ctx, head.x, head.y, r, COLORS.tap, COLORS.tapRim, selected);
+      circle(ctx, head.x, head.y, r, COLORS.tap, COLORS.tapRim, ring, ringWidth);
     }
     ctx.globalAlpha = 1;
   }
@@ -489,7 +566,8 @@ function circle(
   r: number,
   fill: string,
   rim: string,
-  selected: boolean,
+  ring: string | null,
+  ringWidth: number,
 ): void {
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
@@ -498,7 +576,7 @@ function circle(
   ctx.lineWidth = 2;
   ctx.strokeStyle = rim;
   ctx.stroke();
-  if (selected) selectRing(ctx, x, y, r);
+  if (ring) selectRing(ctx, x, y, r, ring, ringWidth);
 }
 
 function star(
@@ -508,7 +586,8 @@ function star(
   r: number,
   fill: string,
   rim: string,
-  selected: boolean,
+  ring: string | null,
+  ringWidth: number,
 ): void {
   ctx.beginPath();
   for (let i = 0; i < 10; i++) {
@@ -525,14 +604,39 @@ function star(
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = rim;
   ctx.stroke();
-  if (selected) selectRing(ctx, x, y, r);
+  if (ring) selectRing(ctx, x, y, r, ring, ringWidth);
 }
 
-function selectRing(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+function diamond(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  fill: string,
+  rim: string,
+  ring: string | null,
+  ringWidth: number,
+): void {
+  const d = r * 1.15;
   ctx.beginPath();
-  ctx.arc(x, y, r + 3, 0, Math.PI * 2);
-  ctx.strokeStyle = "#ffffff";
-  ctx.lineWidth = 1.6;
+  ctx.moveTo(x, y - d);
+  ctx.lineTo(x + d, y);
+  ctx.lineTo(x, y + d);
+  ctx.lineTo(x - d, y);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = rim;
+  ctx.stroke();
+  if (ring) selectRing(ctx, x, y, r, ring, ringWidth);
+}
+
+function selectRing(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, width: number): void {
+  ctx.beginPath();
+  ctx.arc(x, y, r + 2 + width / 2, 0, Math.PI * 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
   ctx.stroke();
 }
 
