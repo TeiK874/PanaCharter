@@ -950,6 +950,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     }
     const d = doc();
     const ctrl = e.ctrlKey || e.metaKey;
+    const shift = e.shiftKey;
 
     // editing/transport keys during an active pointer gesture would corrupt
     // the gesture's undo bookkeeping — ignore them until it ends
@@ -1000,7 +1001,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           // re-derive from the grid formula so pasted notes stay bit-exact
           // with freshly placed ones (exact f64 equality = in-game sync)
           const t = bpm() > 0 ? snapTime(base + c.dt) : base + c.dt;
-          const n = d.place(t, c.lane, c.kind, c.dur);
+          let lane = c.lane;
+          if(shift) {
+            lane = 10 - lane;
+          }
+          const n = d.place(t, lane, c.kind, c.dur);
           d.selection.add(n.id);
         }
       });
