@@ -141,3 +141,4 @@ export const nativePosition = () =>
   invoke<{ raw: number; display: number; playing: boolean }>("native_position");
 export const nativeSetTicks = (times: number[], enabled: boolean) =>
   invoke<void>("native_set_ticks", { times, enabled });
+export const nativeSetVolume = (volume: number) => invoke<void>("native_set_volume", { volume });

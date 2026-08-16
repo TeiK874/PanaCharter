@@ -264,6 +264,7 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
 .editor-toolbar input[type="number"] { width: 74px; padding: 4px 7px; }
 .editor-toolbar select { padding: 4px 7px; }
 .editor-toolbar .mini-label { font-size: 11px; color: var(--muted); }
+.editor-toolbar input[type="range"] { width: 80px; accent-color: var(--pink); }
 
 .tool-btn {
   width: 34px; height: 30px;

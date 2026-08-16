@@ -99,5 +99,6 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | Wheel | Scroll · `Ctrl`+wheel zoom · middle-drag pan |
 | Click the waveform | Seek |
 | ⇆ toolbar button | Toggle vertical-scroll ⇄ horizontal-timeline layout |
+| 🔊 toolbar slider | Adjust audio playback volume |
 
 Everything autosaves; press **？** in the toolbar for this list in-app.
