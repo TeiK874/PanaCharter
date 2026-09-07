@@ -277,6 +277,9 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
             if ended {
                 s.playing = false;
                 s.pos = frames_total;
+                // nothing left to rewind by: leaving the last buffered
+                // latency here parks position/pause ~0.2s before the end
+                s.latency_sec = 0.0;
                 break;
             }
             // render ticks against the (possibly updated) list
@@ -337,8 +340,13 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
             aborted = true;
             break 'outer;
         }
+        // (pa_usec_t)-1 on failure; storing that as ~1.8e13 s would pin the
+        // display position at 0 and make the next pause rewind to the start,
+        // so keep the previous estimate instead
         let lat = unsafe { (api.get_latency)(stream, &mut err) };
-        latency_sec = lat as f64 / 1_000_000.0;
+        if lat != u64::MAX {
+            latency_sec = lat as f64 / 1_000_000.0;
+        }
     }
 
     unsafe {

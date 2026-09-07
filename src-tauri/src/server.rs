@@ -53,12 +53,11 @@ fn settings_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 }
 
 pub fn load_saved_session(app: &AppHandle, state: &ServerState) {
-    if let Ok(path) = settings_path(app) {
-        if let Ok(text) = std::fs::read_to_string(path) {
-            if let Ok(saved) = serde_json::from_str::<Session>(&text) {
-                *state.session.lock().unwrap() = saved;
-            }
-        }
+    if let Ok(path) = settings_path(app)
+        && let Ok(text) = std::fs::read_to_string(path)
+        && let Ok(saved) = serde_json::from_str::<Session>(&text)
+    {
+        *state.session.lock().unwrap() = saved;
     }
 }
 
@@ -188,10 +187,10 @@ pub async fn login(
         .map_err(net_err)?;
     let mut token = None;
     for c in resp.headers().get_all(reqwest::header::SET_COOKIE) {
-        if let Ok(s) = c.to_str() {
-            if let Some(rest) = s.strip_prefix("ew_token=") {
-                token = Some(rest.split(';').next().unwrap_or("").to_string());
-            }
+        if let Ok(s) = c.to_str()
+            && let Some(rest) = s.strip_prefix("ew_token=")
+        {
+            token = Some(rest.split(';').next().unwrap_or("").to_string());
         }
     }
     let v: Value = resp
@@ -351,10 +350,10 @@ fn validate_manifest(
     if !(1..=3).contains(&m.attribute) {
         return Err("Attribute must be 1 (smile), 2 (pure) or 3 (cool)".into());
     }
-    if let Some(bpm) = m.bpm {
-        if !(bpm >= 1.0 && bpm.is_finite()) {
-            return Err("BPM must be at least 1".into());
-        }
+    if let Some(bpm) = m.bpm
+        && !(bpm >= 1.0 && bpm.is_finite())
+    {
+        return Err("BPM must be at least 1".into());
     }
     for (level, level_number, _) in charts {
         if !(1..=20).contains(level_number) {
@@ -550,7 +549,8 @@ pub async fn download_song_to_project(
         req = req.header("cookie", cookie);
     }
     let resp = req.send().await.map_err(net_err)?;
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+    let status = resp.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
         return Err("Custom songs are disabled on this server".into());
     }
     let content_type = resp
@@ -563,8 +563,12 @@ pub async fn download_song_to_project(
     if content_type.contains("json") {
         let v: Value =
             serde_json::from_slice(&bytes).map_err(|e| format!("Bad server response: {e}"))?;
-        check_envelope(v)?;
+        check_envelope(v).map_err(|e| drop_dead_token(&app, &state, e))?;
         return Err("Unexpected server response".into());
+    }
+    // a 403/500 HTML page is not a package — say so instead of "not a valid zip"
+    if !status.is_success() {
+        return Err(format!("Server answered HTTP {status} for download"));
     }
     let summary = crate::projects::import_zip_bytes(&app, bytes.to_vec())?;
     Ok(serde_json::to_value(summary).unwrap())

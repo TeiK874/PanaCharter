@@ -91,15 +91,23 @@ export function openUploadDialog(
     onclick: () => void doUpload(),
   });
 
-  let busy = false;
-
   async function doUpload(): Promise<void> {
     const session = await api.sessionInfo();
     if (!session.logged_in) {
       status.textContent = "Not logged in — open the server panel (top right) and log in first.";
       return;
     }
-    busy = true;
+    // validate before locking the dialog, so a rejected form can't leave it stuck busy
+    const shared = mode === "new" ? parseUserIds(sharedInput.value) : [];
+    if (shared === null) {
+      status.textContent = "The shared-with list contains something that isn't a user ID.";
+      return;
+    }
+    if (mode === "new" && visSelect.value === "shared" && shared.length === 0) {
+      status.textContent = "Shared visibility needs at least one numeric user ID.";
+      return;
+    }
+    dlg.setBusy(true);
     uploadBtn.disabled = true;
     status.textContent = "Uploading… (the server transcodes audio, this can take a moment)";
     try {
@@ -107,21 +115,7 @@ export function openUploadDialog(
         const result = await api.updateSong(projectId, lastUpload!.music_id);
         if (result.last_upload) onUploaded?.(result.last_upload);
         toast(`"${songName}" updated (#${result.music_id})`, "ok");
-        busy = false;
-        dlg.close();
-        return;
       } else {
-        const shared = parseUserIds(sharedInput.value);
-        if (shared === null) {
-          status.textContent = "The shared-with list contains something that isn't a user ID.";
-          uploadBtn.disabled = false;
-          return;
-        }
-        if (visSelect.value === "shared" && shared.length === 0) {
-          status.textContent = "Shared visibility needs at least one numeric user ID.";
-          uploadBtn.disabled = false;
-          return;
-        }
         const result = await api.uploadProject(
           projectId,
           visSelect.value,
@@ -130,15 +124,16 @@ export function openUploadDialog(
         );
         if (result.last_upload) onUploaded?.(result.last_upload);
         toast(`"${songName}" uploaded as #${result.music_id}`, "ok");
-        busy = false;
-        dlg.close();
-        return;
       }
+      dlg.close();
     } catch (e) {
-      status.textContent = String(e);
+      // the dialog can be gone by now — never write the error into a detached node
+      if (dlg.root.isConnected) status.textContent = String(e);
+      else toast(String(e), "error");
+    } finally {
+      dlg.setBusy(false);
+      uploadBtn.disabled = false;
     }
-    busy = false;
-    uploadBtn.disabled = false;
   }
 
   const dlg = openDialog(
@@ -158,8 +153,4 @@ export function openUploadDialog(
     status,
     el("div", { class: "dialog-actions" }, uploadBtn),
   );
-  // don't let Esc silently orphan an in-flight upload
-  dlg.root.addEventListener("cancel", (e) => {
-    if (busy) e.preventDefault();
-  });
 }

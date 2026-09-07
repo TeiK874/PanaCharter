@@ -50,6 +50,14 @@ export class ChartDoc {
     // rule the server's transcoder uses (chart.rs: notes_level <= 1 is SIF1's own
     // "not chained" default and must not be treated as a group).
     const chains = new Map<number, SifNote[]>();
+    // An unchained note: a hold for effect 3 — and for 13, because the server's transcoder
+    // keeps a hold tail on effect 13 whether or not the note has chain partners — a star
+    // for 4, a plain tap for anything else.
+    const unchained = (n: SifNote): Note => {
+      const hold = (n.effect === 3 || n.effect === 13) && n.effect_value > 0;
+      const kind: NoteKind = hold ? "hold" : n.effect === 4 ? "star" : "tap";
+      return { id: nextId++, t: n.timing_sec, lane: n.position, kind, dur: hold ? n.effect_value : 0 };
+    };
     for (const n of sif) {
       if (n.position < 1 || n.position > 9 || n.timing_sec < 0) continue;
       if (n.effect === 11 || n.effect === 12 || n.effect === 13) {
@@ -61,20 +69,12 @@ export class ChartDoc {
           continue;
         }
       }
-      let kind: NoteKind = "tap";
-      let dur = 0;
-      if (n.effect === 3 && n.effect_value > 0) {
-        kind = "hold";
-        dur = n.effect_value;
-      } else if (n.effect === 4) {
-        kind = "star";
-      }
-      doc.notes.push({ id: nextId++, t: n.timing_sec, lane: n.position, kind, dur });
+      doc.notes.push(unchained(n));
     }
     for (const group of chains.values()) {
       if (group.length < 2) {
-        // A lone slide can't be a slider — it stays a plain tap, same as the server.
-        for (const n of group) doc.notes.push({ id: nextId++, t: n.timing_sec, lane: n.position, kind: "tap", dur: 0 });
+        // A lone slide can't be a slider — it plays unchained, same as the server.
+        for (const n of group) doc.notes.push(unchained(n));
         continue;
       }
       const ordered = [...group].sort((a, b) => a.timing_sec - b.timing_sec);
@@ -125,8 +125,8 @@ export class ChartDoc {
     });
   }
 
-  private sort(): void {
-    this.notes.sort((a, b) => a.t - b.t || a.lane - b.lane);
+  private sort(notes: Note[] = this.notes): void {
+    notes.sort((a, b) => a.t - b.t || a.lane - b.lane);
   }
 
   private serialize(): string {
@@ -173,6 +173,24 @@ export class ChartDoc {
     if (next === undefined) return;
     this.undoStack.push(this.serialize());
     this.restore(next);
+    this.onchange();
+  }
+
+  /** Rewrite every note's time through `map` — the live notes AND every undo/redo
+   *  snapshot — without adding an undo step. For the grid offset moving: that re-anchors
+   *  the whole chart at once, and the offset field itself (like BPM) isn't part of the undo
+   *  model, so rather than a per-difficulty step that can't restore the offset, the history
+   *  is carried along — undoing an older edit afterwards restores times on the NEW grid. */
+  remapTimes(map: (t: number) => number): void {
+    const apply = (notes: Note[]): Note[] => {
+      for (const n of notes) n.t = map(n.t);
+      this.sort(notes);
+      return notes;
+    };
+    apply(this.notes);
+    const applyJson = (json: string) => JSON.stringify(apply(JSON.parse(json) as Note[]));
+    this.undoStack = this.undoStack.map(applyJson);
+    this.redoStack = this.redoStack.map(applyJson);
     this.onchange();
   }
 
@@ -307,7 +325,7 @@ export class ChartDoc {
       if (group.length < 2) {
         const n = group[0];
         out.push({
-          message: `Slide at ${n.t.toFixed(3)}s has no chain partner and will play as a plain tap`,
+          message: `Slide at ${n.t.toFixed(3)}s has no chain partner and will play as a plain ${n.dur > 0 ? "hold" : "tap"}`,
           severity: "warning",
           noteId: n.id,
         });

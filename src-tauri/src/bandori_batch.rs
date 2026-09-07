@@ -53,10 +53,10 @@ pub struct BandoriBatch {
 /// "{stem}_{difficulty}" → (stem, difficulty)
 fn split_chart_name(name: &str) -> Option<(String, String)> {
     for diff in DIFFICULTIES {
-        if let Some(stem) = name.strip_suffix(&format!("_{diff}")) {
-            if !stem.is_empty() {
-                return Some((stem.to_string(), diff.to_string()));
-            }
+        if let Some(stem) = name.strip_suffix(&format!("_{diff}"))
+            && !stem.is_empty()
+        {
+            return Some((stem.to_string(), diff.to_string()));
         }
     }
     None
@@ -83,13 +83,12 @@ fn note_bgm_id(text: &str) -> Option<String> {
         if line.starts_with("#WAV") {
             // char-boundary-safe: bundle text is untrusted lossy UTF-8
             let value = line.split_whitespace().nth(1).unwrap_or("");
-            if let Some(base) = value.strip_suffix(".wav") {
-                if base.len() > 3
-                    && base.starts_with("bgm")
-                    && base[3..].chars().all(|c| c.is_ascii_digit())
-                {
-                    return Some(base.to_string());
-                }
+            if let Some(base) = value.strip_suffix(".wav")
+                && base.len() > 3
+                && base.starts_with("bgm")
+                && base[3..].chars().all(|c| c.is_ascii_digit())
+            {
+                return Some(base.to_string());
             }
         } else if let Some(rest) = line.strip_prefix("#BGM ") {
             let id = rest.trim().trim_end_matches(".wav").to_string();
@@ -203,8 +202,29 @@ fn parse_texture2d(data: &[u8], be: bool) -> Result<Texture, String> {
     Err("unrecognized Texture2D layout".into())
 }
 
+/// Jackets are ~1k square; parse_texture2d admits up to 16384², which would be
+/// a 1 GiB pixel buffer (plus another for the RGBA copy) before any data check.
+const MAX_TEXTURE_PIXELS: usize = 4096 * 4096;
+
 fn decode_texture_to_png(tex: &Texture, raw: &[u8]) -> Result<Vec<u8>, String> {
     let (w, h) = (tex.width, tex.height);
+    if w * h > MAX_TEXTURE_PIXELS {
+        return Err(format!("texture {w}x{h} is implausibly large for a jacket"));
+    }
+    // uncompressed formats index straight into `raw`; the block decoders
+    // bounds-check their own input
+    let bpp = match tex.format {
+        3 => 3, // RGB24
+        4 => 4, // RGBA32
+        _ => 0,
+    };
+    if raw.len() < w * h * bpp {
+        return Err(format!(
+            "texture data truncated ({} of {} bytes)",
+            raw.len(),
+            w * h * bpp
+        ));
+    }
     let mut pixels: Vec<u32> = vec![0; w * h];
     let r = match tex.format {
         3 => {
@@ -562,12 +582,11 @@ async fn fetch_cached(
         .and_then(|t| t.elapsed().ok())
         .map(|age| age < std::time::Duration::from_secs(7 * 24 * 3600))
         .unwrap_or(false);
-    if fresh {
-        if let Ok(bytes) = std::fs::read(&path) {
-            if let Ok(v) = serde_json::from_slice(&bytes) {
-                return Ok(v);
-            }
-        }
+    if fresh
+        && let Ok(bytes) = std::fs::read(&path)
+        && let Ok(v) = serde_json::from_slice(&bytes)
+    {
+        return Ok(v);
     }
     let fetched: Result<Value, String> = async {
         let resp = client
@@ -610,7 +629,7 @@ fn session_header(request: &tauri::ipc::Request<'_>) -> Result<String, String> {
 }
 
 /// Binary-body command: payload = one asset bundle.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn bandori_scan(
     state: State<'_, BandoriBatch>,
     request: tauri::ipc::Request<'_>,
@@ -625,7 +644,8 @@ pub fn bandori_scan(
     Ok(catalog(session))
 }
 
-#[tauri::command]
+// async so a scan holding the session lock can't stall the webview thread
+#[tauri::command(async)]
 pub fn bandori_chart(
     state: State<'_, BandoriBatch>,
     session_id: String,
@@ -696,8 +716,10 @@ pub struct BatchImportResult {
     pub audio: String,
 }
 
+// one parameter per IPC field: the JS-side names are the command's API
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
-pub fn bandori_import_song(
+pub async fn bandori_import_song(
     app: AppHandle,
     state: State<'_, BandoriBatch>,
     session_id: String,
@@ -727,7 +749,12 @@ pub fn bandori_import_song(
     let mut audio: Option<(String, Vec<u8>)> = None;
     if let Some((bgm_id, chunks)) = bgm_chunks {
         let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
-        match decode_audio(&cache, &bgm_id, &chunks) {
+        // ffmpeg runs for seconds per song — keep it off the webview thread
+        let decoded =
+            tauri::async_runtime::spawn_blocking(move || decode_audio(&cache, &bgm_id, &chunks))
+                .await
+                .map_err(|e| e.to_string())?;
+        match decoded {
             Ok(a) => {
                 audio_status = format!("ok ({})", a.0);
                 audio = Some(a);

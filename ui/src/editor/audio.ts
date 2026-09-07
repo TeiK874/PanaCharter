@@ -76,9 +76,16 @@ export class Player {
     } catch {
       this.native = false;
     }
-    // The native mixer synthesizes its own beep and has no MP3 decode/resample path;
-    // only bother preloading the sample when the web backend will actually use it.
-    if (!this.native) void this.loadSe();
+    if (this.native) {
+      // The mixer's volume lives in backend state that outlives this Player, so
+      // without this a level set in a previous project would carry over while
+      // the (fresh) slider claims 100%.
+      void this.queued(() => api.nativeSetVolume(this.volume)).catch(() => {});
+    } else {
+      // The native mixer synthesizes its own beep and has no MP3 decode/resample path;
+      // only bother preloading the sample when the web backend will actually use it.
+      void this.loadSe();
+    }
   }
 
   get loaded(): boolean {
