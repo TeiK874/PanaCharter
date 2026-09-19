@@ -3,7 +3,7 @@ import { attempt, confirmDialog, el, fmtTime, openDialog, pickFile, toast } from
 import type { ProjectData, SifNote } from "../types.js";
 import { DIFFICULTIES } from "../types.js";
 import { Player } from "./audio.js";
-import { ChartDoc, allocateSlideId } from "./chart.js";
+import { ChartDoc, allocateSlideId, round6 } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
 import { buildTempoMap } from "./tempo.js";
 import { Renderer } from "./render.js";
@@ -102,10 +102,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
   function snapTime(t: number): number {
     const clamped = Math.max(0, t);
-    if (bpm() <= 0) return clamped;
+    if (bpm() <= 0) return round6(clamped);
     const tm = tempo();
     const snappedBeat = Math.round(tm.beatAt(clamped) * snap) / snap;
-    return Math.max(0, tm.timeAt(snappedBeat));
+    return round6(Math.max(0, tm.timeAt(snappedBeat)));
   }
 
   /** A sensible "one grid division" length in seconds at time `t` — always positive
@@ -324,9 +324,14 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       if (delta === 0) return;
       for (const d of docs.values()) {
         d.edit(() => {
-          for (const n of d.notes) n.t = Math.max(0, n.t + delta);
+          for (const n of d.notes) n.t = round6(Math.max(0, n.t + delta));
         });
       }
+      // Tempo changes are anchored to absolute time too — shift them with everything
+      // else so a change's position relative to the beat grid doesn't move.
+      for (const c of editorMeta.bpm_changes!) c.time_sec = round6(Math.max(0, c.time_sec + delta));
+      markDirty();
+      requestDraw();
     },
   });
 
@@ -1071,12 +1076,12 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
               const onGrid = snapTime(o.t) === o.t;
               if (onGrid) {
                 const beatK = Math.round(tm.beatAt(o.t) * snap) + kd;
-                n.t = Math.max(0, tm.timeAt(beatK / snap));
+                n.t = round6(Math.max(0, tm.timeAt(beatK / snap)));
               } else {
-                n.t = Math.max(0, tm.timeAt(tm.beatAt(o.t) + kd / snap));
+                n.t = round6(Math.max(0, tm.timeAt(tm.beatAt(o.t) + kd / snap)));
               }
             } else {
-              n.t = Math.max(0, o.t + rawDt);
+              n.t = round6(Math.max(0, o.t + rawDt));
             }
             n.lane = o.lane + dl;
           }

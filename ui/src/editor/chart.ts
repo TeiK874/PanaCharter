@@ -36,6 +36,14 @@ export function allocateSlideId(): number {
 
 const EPS = 1e-9;
 
+/** Collapses float noise (drift from repeated snap/paste/tempo math, ~1e-13 scale) down
+ *  to microsecond precision, so notes that are conceptually at the same time serialize
+ *  as bit-identical timing_sec — which is what the server's exact-equality chord check
+ *  relies on. */
+export function round6(t: number): number {
+  return Math.round(t * 1e6) / 1e6;
+}
+
 export class ChartDoc {
   notes: Note[] = [];
   selection = new Set<number>();
@@ -109,18 +117,18 @@ export class ChartDoc {
       if (n.kind === "slide") {
         const isHoldEnd = chainTailIds.has(n.id) && n.dur > 0;
         return {
-          timing_sec: n.t,
+          timing_sec: round6(n.t),
           position: n.lane,
           effect: isHoldEnd ? 13 : 11,
-          effect_value: isHoldEnd ? n.dur : 0,
+          effect_value: isHoldEnd ? round6(n.dur) : 0,
           notes_level: n.slideId,
         };
       }
       return {
-        timing_sec: n.t,
+        timing_sec: round6(n.t),
         position: n.lane,
         effect: n.kind === "hold" ? 3 : n.kind === "star" ? 4 : 1,
-        effect_value: n.kind === "hold" ? n.dur : 0,
+        effect_value: n.kind === "hold" ? round6(n.dur) : 0,
       };
     });
   }
@@ -188,6 +196,8 @@ export class ChartDoc {
 
   /** Place a note; anything already on that exact time+lane is replaced. */
   place(t: number, lane: number, kind: NoteKind, dur = 0, slideId?: number): Note {
+    t = round6(t);
+    dur = round6(dur);
     const clash = this.noteAt(t, lane);
     if (clash) this.notes.splice(this.notes.indexOf(clash), 1);
     const note: Note = { id: nextId++, t, lane, kind, dur, slideId };
