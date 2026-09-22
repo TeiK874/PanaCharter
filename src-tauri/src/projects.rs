@@ -119,6 +119,13 @@ pub struct BpmChange {
     pub bpm: f64,
 }
 
+/// A time-signature change: from `time_sec` onward, this many beats form a measure.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TimeSigChange {
+    pub time_sec: f64,
+    pub beats: u32,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct EditorMeta {
     #[serde(default)]
@@ -134,6 +141,12 @@ pub struct EditorMeta {
     /// Mid-song tempo changes after the initial `Manifest.bpm` at `offset_sec`.
     #[serde(default)]
     pub bpm_changes: Vec<BpmChange>,
+    /// Beats per measure from `offset_sec` onward. Defaults to 4 (common time).
+    #[serde(default = "default_beats_per_measure")]
+    pub beats_per_measure: u32,
+    /// Mid-song time-signature changes after `beats_per_measure` at `offset_sec`.
+    #[serde(default)]
+    pub time_sig_changes: Vec<TimeSigChange>,
 }
 
 fn default_snap() -> u32 {
@@ -145,6 +158,9 @@ fn default_zoom() -> f64 {
 fn default_orientation() -> String {
     "vertical".into()
 }
+fn default_beats_per_measure() -> u32 {
+    4
+}
 
 impl Default for EditorMeta {
     fn default() -> Self {
@@ -155,6 +171,8 @@ impl Default for EditorMeta {
             orientation: default_orientation(),
             last_upload: None,
             bpm_changes: Vec::new(),
+            beats_per_measure: default_beats_per_measure(),
+            time_sig_changes: Vec::new(),
         }
     }
 }

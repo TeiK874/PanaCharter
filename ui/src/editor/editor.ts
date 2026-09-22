@@ -5,7 +5,7 @@ import { DIFFICULTIES } from "../types.js";
 import { Player } from "./audio.js";
 import { ChartDoc, allocateSlideId, round6 } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
-import { buildTempoMap } from "./tempo.js";
+import { buildTempoMap, buildTimeSigMap } from "./tempo.js";
 import { Renderer } from "./render.js";
 import type { DrawState, Orientation } from "./render.js";
 import { openMetadataDialog } from "../views/metadata.js";
@@ -58,6 +58,9 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   const editorMeta = data.editor;
   // Absent on projects saved before mid-song tempo changes existed.
   editorMeta.bpm_changes ??= [];
+  // Absent on projects saved before mid-song time-signature changes existed.
+  editorMeta.beats_per_measure ??= 4;
+  editorMeta.time_sig_changes ??= [];
 
   // --- chart documents ------------------------------------------------------
   const docs = new Map<number, ChartDoc>();
@@ -92,6 +95,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   const bpm = () => manifest.bpm ?? 120;
   // Rebuilt on demand — the change list is tiny, no need to cache/invalidate.
   const tempo = () => buildTempoMap(bpm(), editorMeta.offset_sec, editorMeta.bpm_changes!);
+  const timeSig = () => buildTimeSigMap(editorMeta.beats_per_measure!, tempo(), editorMeta.time_sig_changes!);
 
   const fallbackDuration = () => {
     let last = 60;
@@ -327,9 +331,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           for (const n of d.notes) n.t = round6(Math.max(0, n.t + delta));
         });
       }
-      // Tempo changes are anchored to absolute time too — shift them with everything
-      // else so a change's position relative to the beat grid doesn't move.
+      // Tempo and time-signature changes are anchored to absolute time too — shift them
+      // with everything else so a change's position relative to the beat grid doesn't move.
       for (const c of editorMeta.bpm_changes!) c.time_sec = round6(Math.max(0, c.time_sec + delta));
+      for (const c of editorMeta.time_sig_changes!) c.time_sec = round6(Math.max(0, c.time_sec + delta));
       markDirty();
       requestDraw();
     },
@@ -441,7 +446,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       el("button", {
         class: "btn",
         text: "Tempo…",
-        title: "Add or edit mid-song tempo changes",
+        title: "Add or edit mid-song tempo and time-signature changes",
         onclick: () => openTempoDialog(),
       }),
     ),
@@ -666,8 +671,78 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       },
     });
 
+    const sigRowsHost = el("div", { class: "tempo-rows" });
+
+    function renderSigRows(): void {
+      editorMeta.time_sig_changes!.sort((a, b) => a.time_sec - b.time_sec);
+      sigRowsHost.replaceChildren(
+        ...editorMeta.time_sig_changes!.map((c) => {
+          const timeInput = el("input", {
+            type: "number",
+            step: "0.001",
+            value: String(c.time_sec),
+            title: "Time this time-signature change starts, in seconds",
+            onchange: () => {
+              const v = Number(timeInput.value);
+              if (Number.isFinite(v) && v >= 0) c.time_sec = v;
+              markDirty();
+              requestDraw();
+              renderSigRows();
+            },
+          });
+          const beatsInput = el("input", {
+            type: "number",
+            min: "1",
+            step: "1",
+            value: String(c.beats),
+            title: "Beats per measure from this point onward",
+            onchange: () => {
+              const v = Math.round(Number(beatsInput.value));
+              if (v >= 1) c.beats = v;
+              markDirty();
+              requestDraw();
+            },
+          });
+          return el(
+            "div",
+            { class: "row tempo-row" },
+            timeInput,
+            beatsInput,
+            el("button", {
+              class: "btn btn-ghost",
+              text: "✕",
+              title: "Remove this time-signature change",
+              onclick: () => {
+                editorMeta.time_sig_changes = editorMeta.time_sig_changes!.filter((x) => x !== c);
+                markDirty();
+                requestDraw();
+                renderSigRows();
+              },
+            }),
+          );
+        }),
+      );
+    }
+    renderSigRows();
+
+    const startBeatsInput = el("input", {
+      type: "number",
+      min: "1",
+      step: "1",
+      value: String(editorMeta.beats_per_measure),
+      title: "Beats per measure from the start",
+      onchange: () => {
+        const v = Math.round(Number(startBeatsInput.value));
+        if (v >= 1) {
+          editorMeta.beats_per_measure = v;
+          markDirty();
+          requestDraw();
+        }
+      },
+    });
+
     openDialog(
-      "Tempo changes",
+      "Tempo & time signature",
       el("p", {
         class: "dialog-body",
         text: "The grid follows each change from its time onward — times are absolute seconds, not beats.",
@@ -681,7 +756,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       rowsHost,
       el("button", {
         class: "btn",
-        text: "+ Add at playhead",
+        text: "+ Add tempo change at playhead",
         title: "Insert a tempo change at the current playhead position",
         onclick: () => {
           const t = snapTime(player.time);
@@ -693,6 +768,30 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           markDirty();
           requestDraw();
           renderRows();
+        },
+      }),
+      el("hr", { class: "dialog-sep" }),
+      el(
+        "div",
+        { class: "row tempo-row" },
+        el("span", { class: "mini-label", text: "Start beats/measure" }),
+        startBeatsInput,
+      ),
+      sigRowsHost,
+      el("button", {
+        class: "btn",
+        text: "+ Add time-signature change at playhead",
+        title: "Insert a time-signature change at the current playhead position",
+        onclick: () => {
+          const t = snapTime(player.time);
+          if (t <= editorMeta.offset_sec) {
+            toast("The playhead is at or before the start — move it later first", "error");
+            return;
+          }
+          editorMeta.time_sig_changes!.push({ time_sec: t, beats: timeSig().beatsAt(tempo().beatAt(t)) });
+          markDirty();
+          requestDraw();
+          renderSigRows();
         },
       }),
     );
@@ -844,13 +943,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   }
 
   function viewState(): DrawState {
+    const tm = tempo();
     return {
       orientation,
       scroll,
       zoom,
       bpm: bpm(),
       offset: editorMeta.offset_sec,
-      tempoSegments: tempo().segments,
+      tempoSegments: tm.segments,
+      timeSigSegments: timeSig().segments.map((s) => ({ ...s, startSec: tm.timeAt(s.startBeat) })),
       snap,
       duration: duration(),
       notes: doc().notes,

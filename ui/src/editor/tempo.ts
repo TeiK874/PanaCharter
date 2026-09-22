@@ -76,3 +76,64 @@ export function buildTempoMap(
     },
   };
 }
+
+export interface TimeSigSegment {
+  /** Continuous beat number (from the song's TempoMap) where this segment starts. */
+  startBeat: number;
+  /** Continuous measure number at startBeat (the first segment always starts at measure 0). */
+  startMeasure: number;
+  /** Beats per measure. */
+  beats: number;
+}
+
+export interface TimeSigMap {
+  /** Sorted ascending by startBeat; always has at least one entry. */
+  segments: TimeSigSegment[];
+  /** Continuous (possibly fractional) measure position at a continuous beat — monotonic
+   *  across segment boundaries. */
+  measureAt(beat: number): number;
+  /** Beats per measure in effect at a continuous beat. */
+  beatsAt(beat: number): number;
+}
+
+/** `baseBeats` applies from beat 0 onward; `changes` are additional time-signature changes,
+ *  each anchored to an absolute time and converted to a beat position via `tempo`. A change
+ *  is ignored if its beat count isn't positive or it doesn't fall strictly after the segment
+ *  before it (same tolerant filtering as buildTempoMap). */
+export function buildTimeSigMap(
+  baseBeats: number,
+  tempo: TempoMap,
+  changes: { time_sec: number; beats: number }[],
+): TimeSigMap {
+  const segments: TimeSigSegment[] = [
+    { startBeat: 0, startMeasure: 0, beats: baseBeats > 0 ? baseBeats : 4 },
+  ];
+  const sorted = [...changes].filter((c) => c.beats > 0).sort((a, b) => a.time_sec - b.time_sec);
+  for (const c of sorted) {
+    const prev = segments[segments.length - 1];
+    const startBeat = tempo.beatAt(c.time_sec);
+    if (startBeat <= prev.startBeat) continue;
+    const startMeasure = prev.startMeasure + (startBeat - prev.startBeat) / prev.beats;
+    segments.push({ startBeat, startMeasure, beats: c.beats });
+  }
+
+  function segmentAtBeat(beat: number): TimeSigSegment {
+    let seg = segments[0];
+    for (const s of segments) {
+      if (s.startBeat > beat) break;
+      seg = s;
+    }
+    return seg;
+  }
+
+  return {
+    segments,
+    measureAt(beat) {
+      const seg = segmentAtBeat(beat);
+      return seg.startMeasure + (beat - seg.startBeat) / seg.beats;
+    },
+    beatsAt(beat) {
+      return segmentAtBeat(beat).beats;
+    },
+  };
+}

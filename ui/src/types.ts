@@ -48,6 +48,12 @@ export interface BpmChange {
   bpm: number;
 }
 
+/** A time-signature change: from `time_sec` onward, this many beats form a measure. */
+export interface TimeSigChange {
+  time_sec: number;
+  beats: number;
+}
+
 export interface EditorMeta {
   offset_sec: number;
   snap: number;
@@ -57,6 +63,12 @@ export interface EditorMeta {
   /** Mid-song tempo changes after the initial `Manifest.bpm` at `offset_sec`. Optional —
    *  absent on projects saved before this existed. */
   bpm_changes?: BpmChange[];
+  /** Beats per measure from `offset_sec` onward. Defaults to 4 (common time). Optional —
+   *  absent on projects saved before this existed. */
+  beats_per_measure?: number;
+  /** Mid-song time-signature changes after `beats_per_measure` at `offset_sec`. Optional —
+   *  absent on projects saved before this existed. */
+  time_sig_changes?: TimeSigChange[];
 }
 
 export interface ProjectSummary {

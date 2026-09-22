@@ -102,6 +102,6 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | ⇆ toolbar button | Toggle vertical-scroll ⇄ horizontal-timeline layout |
 | 🔊 toolbar slider | Adjust audio playback volume |
 | 🔔 tick-sound dropdown | Switch the playback tick between a synthesized beep and a sample SE (web audio backend only) |
-| Tempo… toolbar button | Add/edit mid-song BPM changes — the grid and snapping follow each change from its time onward |
+| Tempo… toolbar button | Add/edit mid-song BPM and time-signature changes — the grid, measure lines/numbering, and snapping follow each change from its time onward |
 
 Everything autosaves; press **？** in the toolbar for this list in-app.

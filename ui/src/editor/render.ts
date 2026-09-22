@@ -13,6 +13,10 @@ export interface ViewState {
   /** Tempo segments covering the whole song (always at least one entry) — the grid follows
    *  these instead of the flat bpm/offset above whenever there's more than one. */
   tempoSegments: { startSec: number; startBeat: number; bpm: number }[];
+  /** Time-signature segments covering the whole song (always at least one entry) — measure
+   *  lines/numbering follow these instead of a flat 4 beats/measure whenever there's more
+   *  than one. */
+  timeSigSegments: { startSec: number; startBeat: number; startMeasure: number; beats: number }[];
   /** Subdivisions per beat for the snap grid. */
   snap: number;
   duration: number;
@@ -76,6 +80,10 @@ const COLORS = {
    *  color, drawn over the grid AND the waveform so a BPM change is visible either way. */
   tempoMarker: "#ffab49",
   tempoMarkerText: "#14141f",
+  /** Time-signature-change marker line + label chip — a distinct hue from the tempo
+   *  marker so the two kinds of change read apart at a glance. */
+  timeSigMarker: "#5ee0a8",
+  timeSigMarkerText: "#14141f",
 };
 
 const SELECT_RING_WIDTH = 1.6;
@@ -214,6 +222,7 @@ export class Renderer {
     this.drawGrid(s);
     this.drawGutter(s);
     this.drawTempoMarkers(s);
+    this.drawTimeSigMarkers(s);
     this.drawSimLines(s);
     this.drawSlideChains(s);
 
@@ -315,6 +324,17 @@ export class Renderer {
     ctx.stroke();
   }
 
+  /** The time-signature segment covering `beat` (continuous beat count from song start). */
+  private timeSigSegAt(s: DrawState, beat: number): { startBeat: number; startMeasure: number; beats: number } {
+    const segs = s.timeSigSegments.length ? s.timeSigSegments : [{ startBeat: 0, startMeasure: 0, beats: 4 }];
+    let seg = segs[0];
+    for (const cand of segs) {
+      if (cand.startBeat > beat + 1e-6) break;
+      seg = cand;
+    }
+    return seg;
+  }
+
   private drawGrid(s: DrawState): void {
     const segments = s.tempoSegments.length
       ? s.tempoSegments
@@ -345,15 +365,18 @@ export class Renderer {
           // Measure numbering counts continuously across tempo changes via startBeat,
           // so it doesn't reset or jump at a BPM change.
           const globalBeat = Math.round(seg.startBeat) + k;
-          const measure = ((globalBeat % 4) + 4) % 4 === 0;
+          const tsSeg = this.timeSigSegAt(s, globalBeat);
+          const beatsPerMeasure = Math.max(1, tsSeg.beats);
+          const beatInSeg = Math.round(globalBeat - tsSeg.startBeat);
+          const measure = ((beatInSeg % beatsPerMeasure) + beatsPerMeasure) % beatsPerMeasure === 0;
           const t = seg.startSec + k * beat;
           this.timeLine(t, s, measure ? COLORS.measure : COLORS.beat, measure ? 1.5 : 1);
-          if (measure && beat * s.zoom * 4 > 40) {
+          if (measure && beat * s.zoom * beatsPerMeasure > 40) {
             const { ctx } = this;
             ctx.fillStyle = COLORS.label;
             ctx.font = "10px ui-monospace, monospace";
             const p = this.tpx(t, s);
-            const label = `${Math.floor(globalBeat / 4) + 1}`;
+            const label = `${Math.round(tsSeg.startMeasure) + Math.floor(beatInSeg / beatsPerMeasure) + 1}`;
             if (s.orientation === "vertical") ctx.fillText(label, GUTTER + 4, p - 3);
             else ctx.fillText(label, p + 3, GUTTER + 11);
           }
@@ -467,6 +490,59 @@ export class Renderer {
       ctx.fillStyle = COLORS.tempoMarker;
       ctx.fill();
       ctx.fillStyle = COLORS.tempoMarkerText;
+      ctx.fillText(label, bx + padX, by + boxH - 4);
+    }
+  }
+
+  /** Same idea as drawTempoMarkers, for time-signature changes — offset below the tempo
+   *  chip (or to the side, in horizontal layout) so the two don't overlap when they land
+   *  at the same time. */
+  private drawTimeSigMarkers(s: DrawState): void {
+    if (s.timeSigSegments.length < 2) return;
+    const { ctx } = this;
+    const o = s.orientation;
+    const t0 = s.scroll - 1;
+    const t1 = s.scroll + this.timeSpan(s) + 1;
+
+    for (let i = 1; i < s.timeSigSegments.length; i++) {
+      const seg = s.timeSigSegments[i];
+      if (seg.startSec < t0 || seg.startSec > t1) continue;
+      const p = Math.round(this.tpx(seg.startSec, s)) + 0.5;
+
+      ctx.strokeStyle = COLORS.timeSigMarker;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      if (o === "vertical") {
+        ctx.moveTo(0, p);
+        ctx.lineTo(this.w, p);
+      } else {
+        ctx.moveTo(p, 0);
+        ctx.lineTo(p, this.h);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      const label = `${seg.beats}/4`;
+      ctx.font = "700 10px ui-monospace, monospace";
+      const textW = ctx.measureText(label).width;
+      const padX = 4;
+      const boxW = textW + padX * 2;
+      const boxH = 14;
+      const bx = o === "vertical" ? 2 : Math.min(p + 3, this.w - boxW - 2);
+      // Offset from drawTempoMarkers' spot (above the line / first row) so a change that
+      // lands at the same time as a tempo change doesn't overlap it: below the line in
+      // vertical layout, a second row below GUTTER in horizontal layout.
+      const by =
+        o === "vertical"
+          ? Math.min(Math.max(p + 2, GUTTER + 1), this.h - boxH - 1)
+          : GUTTER + 2 + boxH + 2;
+
+      ctx.beginPath();
+      roundRect(ctx, bx, by, boxW, boxH, 3);
+      ctx.fillStyle = COLORS.timeSigMarker;
+      ctx.fill();
+      ctx.fillStyle = COLORS.timeSigMarkerText;
       ctx.fillText(label, bx + padX, by + boxH - 4);
     }
   }
