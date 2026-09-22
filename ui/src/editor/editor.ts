@@ -8,6 +8,7 @@ import type { Note, NoteKind } from "./chart.js";
 import { buildTempoMap, buildTimeSigMap } from "./tempo.js";
 import { Renderer } from "./render.js";
 import type { DrawState, Orientation } from "./render.js";
+import { NotePreviewRenderer } from "./preview.js";
 import { openMetadataDialog } from "../views/metadata.js";
 import { openUploadDialog } from "../views/upload.js";
 import { CONVERTERS, importChart } from "../convert/index.js";
@@ -52,6 +53,37 @@ type Gesture =
 const SNAPS = [1, 2, 3, 4, 6, 8, 12, 16];
 const RATES = [0.5, 0.75, 1];
 
+// In-game note speed (1-10) <-> seconds from spawn to judgment, for the note preview.
+// Speed 1 = 1.8s (slowest), speed 10 = 0.45s (fastest), linear in between.
+const PREVIEW_SEC_MIN = 0.45;
+const PREVIEW_SEC_MAX = 1.8;
+const PREVIEW_SPEED_KEY = "charter.previewApproachSec";
+
+function speedToApproachSec(speed: number): number {
+  const s = Math.min(10, Math.max(1, speed));
+  return PREVIEW_SEC_MAX + ((s - 1) * (PREVIEW_SEC_MIN - PREVIEW_SEC_MAX)) / 9;
+}
+function approachSecToSpeed(sec: number): number {
+  const clamped = Math.min(PREVIEW_SEC_MAX, Math.max(PREVIEW_SEC_MIN, sec));
+  return 1 + ((clamped - PREVIEW_SEC_MAX) * 9) / (PREVIEW_SEC_MIN - PREVIEW_SEC_MAX);
+}
+function loadPreviewApproachSec(): number {
+  const raw = Number(localStorage.getItem(PREVIEW_SPEED_KEY));
+  if (Number.isFinite(raw) && raw >= PREVIEW_SEC_MIN && raw <= PREVIEW_SEC_MAX) return raw;
+  return speedToApproachSec(6);
+}
+
+// Judgment-position display size, as a percentage (50-200, 100 = the reference size).
+const PREVIEW_SCALE_MIN = 50;
+const PREVIEW_SCALE_MAX = 200;
+const PREVIEW_SCALE_KEY = "charter.previewSizeScalePct";
+
+function loadPreviewSizeScale(): number {
+  const raw = Number(localStorage.getItem(PREVIEW_SCALE_KEY));
+  if (Number.isFinite(raw) && raw >= PREVIEW_SCALE_MIN && raw <= PREVIEW_SCALE_MAX) return raw / 100;
+  return 1;
+}
+
 export async function createEditor(projectId: string, goBack: () => void): Promise<EditorView> {
   const data: ProjectData = await api.projectLoad(projectId);
   const manifest = data.manifest;
@@ -82,6 +114,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   let ghost: DrawState["ghost"] = null;
   let needsDraw = true;
   let disposed = false;
+  // Note-preview speed and judgment-position size — app-wide settings (not per-project),
+  // so they carry over between songs like a player's own in-game settings would.
+  let previewApproachSec = loadPreviewApproachSec();
+  let previewSizeScale = loadPreviewSizeScale();
   let clipboard: { dt: number; lane: number; kind: NoteKind; dur: number; slideId?: number }[] = [];
   // Slide chain currently being extended by sequential clicks of the slide tool.
   let activeSlide: { slideId: number; lastId: number; lastT: number; lastLane: number } | null = null;
@@ -468,6 +504,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       el("button", { class: "btn tool-btn", text: "+", title: "Zoom in (Ctrl+wheel)", onclick: () => zoomBy(1.3) }),
       orientBtn,
     ),
+    el(
+      "div",
+      { class: "group" },
+      el("button", { class: "btn", text: "⚙ Preview…", title: "Note-preview settings", onclick: () => openPreviewSettingsDialog() }),
+    ),
     el("div", { class: "group" }, el("button", { class: "btn", text: "？", title: "Shortcuts", onclick: showHelp })),
     el("div", { class: "spacer", style: "flex:1" }),
     el(
@@ -495,6 +536,132 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   );
   const canvasWrap = el("div", { class: "editor-canvas-wrap" }, canvas);
   const renderer = new Renderer(canvas);
+
+  // --- note preview -----------------------------------------------------------
+  const previewCanvas = el("canvas");
+  const previewWrap = el("div", { class: "preview-canvas-wrap" }, previewCanvas);
+  const previewRenderer = new NotePreviewRenderer(previewCanvas);
+
+  function setPreviewApproachSec(sec: number): void {
+    previewApproachSec = Math.min(PREVIEW_SEC_MAX, Math.max(PREVIEW_SEC_MIN, sec));
+    localStorage.setItem(PREVIEW_SPEED_KEY, String(previewApproachSec));
+    updatePreviewSpeedInputs();
+    requestDraw();
+  }
+
+  const previewSpeedInput = el("input", {
+    type: "number",
+    min: "1",
+    max: "10",
+    step: "0.1",
+    title: "Note speed (game speed value 1-10)",
+    oninput: () => setPreviewApproachSec(speedToApproachSec(Number(previewSpeedInput.value))),
+  });
+  const previewSpeedSlider = el("input", {
+    type: "range",
+    min: "1",
+    max: "10",
+    step: "0.1",
+    title: "Note speed (game speed value 1-10)",
+    oninput: () => setPreviewApproachSec(speedToApproachSec(Number(previewSpeedSlider.value))),
+  });
+  const previewSecInput = el("input", {
+    type: "number",
+    min: String(PREVIEW_SEC_MIN),
+    max: String(PREVIEW_SEC_MAX),
+    step: "0.01",
+    title: "Time from spawn to judgment, in seconds",
+    oninput: () => setPreviewApproachSec(Number(previewSecInput.value)),
+  });
+  function bumpPreviewSpeed(delta: number): void {
+    const speed = Math.round((approachSecToSpeed(previewApproachSec) + delta) * 10) / 10;
+    setPreviewApproachSec(speedToApproachSec(speed));
+  }
+  function updatePreviewSpeedInputs(): void {
+    const speed = Math.round(approachSecToSpeed(previewApproachSec) * 10) / 10;
+    previewSpeedInput.value = String(speed);
+    previewSpeedSlider.value = String(speed);
+    previewSecInput.value = String(Math.round(previewApproachSec * 100) / 100);
+  }
+  updatePreviewSpeedInputs();
+
+  function setPreviewSizeScale(pct: number): void {
+    const clamped = Math.min(PREVIEW_SCALE_MAX, Math.max(PREVIEW_SCALE_MIN, Math.round(pct)));
+    previewSizeScale = clamped / 100;
+    localStorage.setItem(PREVIEW_SCALE_KEY, String(clamped));
+    previewSizeInput.value = String(clamped);
+    previewSizeSlider.value = String(clamped);
+    requestDraw();
+  }
+  const previewSizeSlider = el("input", {
+    type: "range",
+    min: String(PREVIEW_SCALE_MIN),
+    max: String(PREVIEW_SCALE_MAX),
+    step: "1",
+    value: String(Math.round(previewSizeScale * 100)),
+    title: "Judgment-position display size",
+    oninput: () => setPreviewSizeScale(Number(previewSizeSlider.value)),
+  });
+  const previewSizeInput = el("input", {
+    type: "number",
+    min: String(PREVIEW_SCALE_MIN),
+    max: String(PREVIEW_SCALE_MAX),
+    step: "1",
+    value: String(Math.round(previewSizeScale * 100)),
+    title: "Judgment-position display size, %",
+    oninput: () => setPreviewSizeScale(Number(previewSizeInput.value)),
+  });
+
+  function openPreviewSettingsDialog(): void {
+    openDialog(
+      "Note preview settings",
+      el("p", {
+        class: "dialog-body",
+        text: "Game speed 1-10, or seconds directly — how long a note takes from spawn to the judgment line.",
+      }),
+      el(
+        "div",
+        { class: "row preview-speed-row" },
+        el("span", { class: "mini-label", text: "Speed" }),
+        el("button", { class: "btn btn-ghost tool-btn", text: "−", title: "Slower", onclick: () => bumpPreviewSpeed(-0.1) }),
+        previewSpeedSlider,
+        el("button", { class: "btn btn-ghost tool-btn", text: "+", title: "Faster", onclick: () => bumpPreviewSpeed(0.1) }),
+        previewSpeedInput,
+        el("span", { class: "mini-label", text: "sec" }),
+        previewSecInput,
+      ),
+      el(
+        "div",
+        { class: "row preview-speed-row" },
+        el("span", { class: "mini-label", text: "Size" }),
+        previewSizeSlider,
+        previewSizeInput,
+        el("span", { class: "mini-label", text: "%" }),
+      ),
+    );
+  }
+
+  const previewPanel = el("div", { class: "preview-panel" }, previewWrap);
+  const previewResizer = el("div", { class: "preview-resizer", title: "Drag to resize the preview" });
+
+  previewResizer.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = previewPanel.getBoundingClientRect().width;
+    const onMove = (ev: PointerEvent) => {
+      const bodyWidth = editorBody.getBoundingClientRect().width;
+      const w = Math.min(bodyWidth * 0.7, Math.max(140, startWidth + (ev.clientX - startX)));
+      previewPanel.style.width = `${w}px`;
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  });
+
+  const editorBody = el("div", { class: "editor-body" }, previewPanel, previewResizer, canvasWrap);
 
   async function pickAudio(): Promise<void> {
     const file = await pickFile("audio/*,.ogg,.mp3,.wav");
@@ -1474,6 +1641,14 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       needsDraw = false;
       renderer.draw(viewState());
     }
+    // The preview animates continuously against the playhead, independent of the main
+    // canvas's needsDraw gating.
+    previewRenderer.draw({
+      now: player.displayTime,
+      approachSec: previewApproachSec,
+      notes: doc().notes,
+      sizeScale: previewSizeScale,
+    });
     requestAnimationFrame(frame);
   }
 
@@ -1482,6 +1657,8 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     requestDraw();
   });
   resizeObserver.observe(canvasWrap);
+  const previewResizeObserver = new ResizeObserver(() => previewRenderer.resize());
+  previewResizeObserver.observe(previewWrap);
 
   player.onstate = () => {
     playBtn.textContent = player.playing ? "⏸" : "⏵";
@@ -1501,12 +1678,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   for (const d of docs.values()) hookDoc(d);
 
   // --- assemble ---------------------------------------------------------------
-  const root = el("div", { class: "view editor-view" }, toolbar, canvasWrap, statusbar);
+  const root = el("div", { class: "view editor-view" }, toolbar, editorBody, statusbar);
 
   renderTabs();
   updateStatus();
   requestAnimationFrame(() => {
     renderer.resize();
+    previewRenderer.resize();
     requestDraw();
     frame();
   });
@@ -1524,6 +1702,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       disposed = true;
       window.removeEventListener("keydown", onKey);
       resizeObserver.disconnect();
+      previewResizeObserver.disconnect();
       player.dispose();
       if (saveTimer !== null) {
         clearTimeout(saveTimer);

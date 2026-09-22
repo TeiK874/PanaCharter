@@ -103,5 +103,6 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | 🔊 toolbar slider | Adjust audio playback volume |
 | 🔔 tick-sound dropdown | Switch the playback tick between a synthesized beep and a sample SE (web audio backend only) |
 | Tempo… toolbar button | Add/edit mid-song BPM and time-signature changes — the grid, measure lines/numbering, and snapping follow each change from its time onward |
+| Note preview (left panel) | In-game-style preview: notes fly from a top-center spawn point out to a fan of 9 judgment circles, growing as they approach. Drag its right edge to resize; the speed control (game speed 1–10, or seconds directly) is an app-wide setting, saved across projects |
 
 Everything autosaves; press **？** in the toolbar for this list in-app.

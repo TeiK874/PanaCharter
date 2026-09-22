@@ -304,6 +304,36 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
   background: rgba(20, 20, 31, 0.8);
 }
 
+.editor-body { flex: 1; display: flex; min-height: 0; }
+
+.preview-panel {
+  flex: none;
+  width: 360px;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+}
+.preview-speed-row {
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.preview-speed-row input[type="number"] { width: 68px; padding: 4px 6px; }
+.preview-speed-row input[type="range"] { width: 70px; accent-color: var(--pink); }
+.preview-canvas-wrap { flex: 1; position: relative; min-height: 0; }
+.preview-canvas-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.preview-resizer {
+  flex: none;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  border-right: 1px solid var(--line);
+}
+.preview-resizer:hover { background: var(--bg-3); }
+
 .statusbar {
   display: flex;
   align-items: center;
