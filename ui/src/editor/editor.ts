@@ -1277,9 +1277,12 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       d.edit(() => {
         d.selection.clear();
         for (const c of clipboard) {
-          // re-derive from the grid formula so pasted notes stay bit-exact
-          // with freshly placed ones (exact f64 equality = in-game sync)
-          const t = bpm() > 0 ? snapTime(base + c.dt) : base + c.dt;
+          // Keep each note's original offset from the first copied note as-is, rather
+          // than re-snapping to the CURRENT snap setting — that would distort spacing
+          // for a selection that mixes notes placed under different snap divisions
+          // (e.g. triplets alongside quarter notes). round6 alone keeps notes that were
+          // simultaneous in the source staying bit-identical after paste.
+          const t = round6(Math.max(0, base + c.dt));
           let lane = c.lane;
           if(shift) {
             lane = 10 - lane;
