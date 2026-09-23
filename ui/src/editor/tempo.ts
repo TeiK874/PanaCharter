@@ -92,6 +92,8 @@ export interface TimeSigMap {
   /** Continuous (possibly fractional) measure position at a continuous beat — monotonic
    *  across segment boundaries. */
   measureAt(beat: number): number;
+  /** Inverse of measureAt. */
+  beatAtMeasure(measure: number): number;
   /** Beats per measure in effect at a continuous beat. */
   beatsAt(beat: number): number;
 }
@@ -126,11 +128,24 @@ export function buildTimeSigMap(
     return seg;
   }
 
+  function segmentAtMeasure(measure: number): TimeSigSegment {
+    let seg = segments[0];
+    for (const s of segments) {
+      if (s.startMeasure > measure) break;
+      seg = s;
+    }
+    return seg;
+  }
+
   return {
     segments,
     measureAt(beat) {
       const seg = segmentAtBeat(beat);
       return seg.startMeasure + (beat - seg.startBeat) / seg.beats;
+    },
+    beatAtMeasure(measure) {
+      const seg = segmentAtMeasure(measure);
+      return seg.startBeat + (measure - seg.startMeasure) * seg.beats;
     },
     beatsAt(beat) {
       return segmentAtBeat(beat).beats;

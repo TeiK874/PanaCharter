@@ -118,6 +118,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   // so they carry over between songs like a player's own in-game settings would.
   let previewApproachSec = loadPreviewApproachSec();
   let previewSizeScale = loadPreviewSizeScale();
+  let previewHoverLane: number | null = null;
   let clipboard: { dt: number; lane: number; kind: NoteKind; dur: number; slideId?: number }[] = [];
   // Slide chain currently being extended by sequential clicks of the slide tool.
   let activeSlide: { slideId: number; lastId: number; lastT: number; lastLane: number } | null = null;
@@ -132,6 +133,31 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   // Rebuilt on demand — the change list is tiny, no need to cache/invalidate.
   const tempo = () => buildTempoMap(bpm(), editorMeta.offset_sec, editorMeta.bpm_changes!);
   const timeSig = () => buildTimeSigMap(editorMeta.beats_per_measure!, tempo(), editorMeta.time_sig_changes!);
+
+  /** Current measure/beat label, plus note density (notes/sec) for the current measure and
+   *  the 3 after it — for the note preview's density readout. */
+  function currentMeasureInfo(): { measureLabel: string; measureNps: number[] } {
+    const tm = tempo();
+    const ts = timeSig();
+    const curBeat = tm.beatAt(player.displayTime);
+    const measureFloat = ts.measureAt(curBeat);
+    const measureIndex = Math.floor(measureFloat);
+    const beatsPerMeasure = ts.beatsAt(curBeat);
+    const beatInMeasure = Math.floor((measureFloat - measureIndex) * beatsPerMeasure) + 1;
+    const measureLabel = `Measure ${measureIndex + 1} · Beat ${beatInMeasure}`;
+
+    const notes = doc().notes;
+    const measureNps: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const secStart = tm.timeAt(ts.beatAtMeasure(measureIndex + i));
+      const secEnd = tm.timeAt(ts.beatAtMeasure(measureIndex + i + 1));
+      const dur = Math.max(1e-6, secEnd - secStart);
+      let count = 0;
+      for (const n of notes) if (n.t >= secStart && n.t < secEnd) count++;
+      measureNps.push(count / dur);
+    }
+    return { measureLabel, measureNps };
+  }
 
   const fallbackDuration = () => {
     let last = 60;
@@ -542,6 +568,14 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   const previewWrap = el("div", { class: "preview-canvas-wrap" }, previewCanvas);
   const previewRenderer = new NotePreviewRenderer(previewCanvas);
 
+  previewCanvas.addEventListener("pointermove", (e) => {
+    const rect = previewCanvas.getBoundingClientRect();
+    previewHoverLane = previewRenderer.laneAtPoint(e.clientX - rect.left, e.clientY - rect.top);
+  });
+  previewCanvas.addEventListener("pointerleave", () => {
+    previewHoverLane = null;
+  });
+
   function setPreviewApproachSec(sec: number): void {
     previewApproachSec = Math.min(PREVIEW_SEC_MAX, Math.max(PREVIEW_SEC_MIN, sec));
     localStorage.setItem(PREVIEW_SPEED_KEY, String(previewApproachSec));
@@ -684,9 +718,14 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
   // --- status bar -----------------------------------------------------------
   const saveSpan = el("span", { class: "save-state saved", text: "saved" });
-  const comboSpan = el("span");
+  // Combo count is just the note total (see ChartDoc.comboCount), so show the kind
+  // breakdown alongside it instead of a separate, always-identical note-count span.
+  const comboSpan = el("span", { title: "Combo (= note count for this difficulty), by kind" });
   const selSpan = el("span");
   const cursorSpan = el("span");
+  const npsSpan = el("span", { title: "Average notes/sec, and the densest 1-second window" });
+  const lengthSpan = el("span", { title: "Time from the first note to the last" });
+  const tempoChangesSpan = el("span", { title: "Mid-song tempo and time-signature changes" });
   const issuesSpan = el("span", {
     class: "issues",
     title: "Chart issues — click for details",
@@ -700,14 +739,27 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     comboSpan,
     selSpan,
     issuesSpan,
+    npsSpan,
+    lengthSpan,
+    tempoChangesSpan,
     el("span", { class: "spacer", style: "flex:1" }),
     cursorSpan,
   );
 
+  /** Densest 1-second window, in notes — `times` must already be sorted ascending. */
+  function maxNotesPerSecond(times: number[]): number {
+    let max = 0;
+    let j = 0;
+    for (let i = 0; i < times.length; i++) {
+      while (times[j] < times[i] - 1) j++;
+      max = Math.max(max, i - j + 1);
+    }
+    return max;
+  }
+
   function updateStatus(): void {
     saveSpan.textContent = saveState;
     saveSpan.className = `save-state ${saveState === "saved" ? "saved" : "dirty"}`;
-    comboSpan.textContent = `combo ${doc().comboCount}`;
     selSpan.textContent = doc().selection.size ? `sel ${doc().selection.size}` : "";
     const issues = doc().issues(player.loaded ? player.duration : 0);
     const errors = issues.filter((i) => i.severity === "error").length;
@@ -715,6 +767,27 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       ? `⚠ ${issues.length} issue${issues.length > 1 ? "s" : ""}`
       : "✓ no issues";
     issuesSpan.className = `issues ${errors ? "bad" : ""}`;
+
+    const notes = doc().notes;
+    const byKind = { tap: 0, hold: 0, star: 0, slide: 0 };
+    for (const n of notes) byKind[n.kind]++;
+    comboSpan.textContent =
+      `combo ${doc().comboCount} (T${byKind.tap} H${byKind.hold} St${byKind.star} Sl${byKind.slide})`;
+
+    if (notes.length > 0) {
+      const times = notes.map((n) => n.t).sort((a, b) => a - b);
+      const lengthSec = times[times.length - 1] - times[0];
+      const avgNps = lengthSec > 0 ? notes.length / lengthSec : 0;
+      npsSpan.textContent = `NPS avg ${avgNps.toFixed(1)} / max ${maxNotesPerSecond(times)}`;
+      lengthSpan.textContent = `len ${fmtTime(lengthSec)}`;
+    } else {
+      npsSpan.textContent = "NPS —";
+      lengthSpan.textContent = "len —";
+    }
+
+    const bpmChanges = editorMeta.bpm_changes?.length ?? 0;
+    const timeSigChanges = editorMeta.time_sig_changes?.length ?? 0;
+    tempoChangesSpan.textContent = `${bpmChanges} BPM chg · ${timeSigChanges} time-sig chg`;
   }
 
   function showIssues(): void {
@@ -1643,11 +1716,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     }
     // The preview animates continuously against the playhead, independent of the main
     // canvas's needsDraw gating.
+    const measureInfo = currentMeasureInfo();
     previewRenderer.draw({
       now: player.displayTime,
       approachSec: previewApproachSec,
       notes: doc().notes,
       sizeScale: previewSizeScale,
+      measureLabel: measureInfo.measureLabel,
+      measureNps: measureInfo.measureNps,
+      hoverLane: previewHoverLane,
     });
     requestAnimationFrame(frame);
   }

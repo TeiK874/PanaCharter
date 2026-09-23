@@ -12,6 +12,14 @@ export interface PreviewState {
   notes: Note[];
   /** Judgment-position display size multiplier, 0.5-2.0 (1.0 = 100%). */
   sizeScale: number;
+  /** e.g. "Measure 12 · Beat 3", already formatted (tempo/time-signature math lives in
+   *  editor.ts, which has the song's tempo map — this renderer just displays it). */
+  measureLabel: string;
+  /** Notes/sec for the current measure and the 3 after it (index 0 = current). */
+  measureNps: number[];
+  /** Lane (1-9) the pointer is currently over the lane-stats chart for, if any — see
+   *  laneAtPoint(). */
+  hoverLane: number | null;
 }
 
 const LANES = 9;
@@ -41,6 +49,12 @@ const COLORS = {
   slide: "#b48cff",
   slideRim: "#7c56c9",
   slideBody: "rgba(180, 140, 255, 0.35)",
+  label: "#77748f",
+  labelStrong: "#eceaf4",
+  density: "#62b1ff",
+  densityNow: "#ffab49",
+  tooltipBg: "#2e2e45",
+  tooltipBorder: "#4a4a6e",
 };
 
 function colorFor(kind: NoteKind): readonly [string, string, string] {
@@ -60,6 +74,23 @@ function colorFor(kind: NoteKind): readonly [string, string, string] {
 function noteScale(progress: number): number {
   const p = Math.min(1, Math.max(0, progress));
   return MIN_SCALE + (1 - MIN_SCALE) * p * p;
+}
+
+interface LaneCounts {
+  tap: number;
+  hold: number;
+  star: number;
+  slide: number;
+}
+
+/** Note counts per lane (index 0 = lane 1), broken down by kind. */
+function laneCounts(notes: Note[]): LaneCounts[] {
+  const counts: LaneCounts[] = Array.from({ length: LANES }, () => ({ tap: 0, hold: 0, star: 0, slide: 0 }));
+  for (const n of notes) {
+    const c = counts[n.lane - 1];
+    if (c) c[n.kind]++;
+  }
+  return counts;
 }
 
 interface Point {
@@ -91,11 +122,13 @@ export class NotePreviewRenderer {
    *  scale, so judgment positions keep a fixed center as that scale changes. The margin
    *  around the fan is sized for the LARGEST a judgment position can ever draw (see
    *  JUDGE_RADIUS_MAX_SCALE) so it never gets clipped at the top or sides, no matter the
-   *  current size setting. The fan is kept in the upper part of the panel — the rest is
-   *  left blank for future stats display. */
-  private geometry(): { spawn: Point; fanRadius: number } {
+   *  current size setting. The fan is kept in the upper part of the panel — the rest
+   *  (statsTop downward) is used for the lane-stats bar chart below. */
+  private geometry(): { spawn: Point; fanRadius: number; statsTop: number } {
     const edgeMargin = 3;
-    const bottomReserveFrac = 0.35;
+    // Reserves room for the measure/beat readout, the density chart and the lane-stats
+    // chart below the fan (see statsLayout()).
+    const bottomReserveFrac = 0.45;
     // judgeRadius = fanRadius * k at the largest size setting — lane 1/9 (level with
     // spawn, either side) need fanRadius + fanRadius*k to clear the sides, and their top
     // edge (spawn.y - fanRadius*k) needs to clear the panel's top. The +10% covers the
@@ -109,7 +142,45 @@ export class NotePreviewRenderer {
     const heightLimit = Math.max(10, (topRegionBottom - edgeMargin) / (1 + 2 * k));
     const fanRadius = Math.max(16, Math.min(widthLimit, heightLimit));
     const spawn = { x: this.w / 2, y: fanRadius * k + edgeMargin };
-    return { spawn, fanRadius };
+    // Start the stats block right after the fan's own actual bottom edge (which is often
+    // well short of topRegionBottom — e.g. whenever the fan is width- rather than
+    // height-limited) rather than always at the reserved boundary, so there's no dead gap
+    // between them.
+    const statsTop = Math.min(topRegionBottom, spawn.y + fanRadius * (1 + k));
+    return { spawn, fanRadius, statsTop };
+  }
+
+  /** How the area below the fan (from statsTop down) splits into rows — the measure/beat
+   *  label, the density mini-chart, and the lane-stats chart — degrading gracefully (later
+   *  rows dropped first) if the panel is too short to fit all of them. Shared by draw()
+   *  and laneAtPoint() so hit-testing always matches what's actually drawn. */
+  private statsLayout(statsTop: number): {
+    measureY: number | null;
+    npsTop: number | null;
+    npsBottom: number | null;
+    laneTop: number;
+    laneBottom: number;
+  } {
+    const top = statsTop + 4;
+    // Leaves clear space below the lane-stats chart rather than running it to the edge.
+    const bottom = this.h - 16;
+    let cursor = top;
+    let measureY: number | null = null;
+    let npsTop: number | null = null;
+    let npsBottom: number | null = null;
+
+    const measureRowH = 11;
+    if (bottom - cursor >= measureRowH + 10) {
+      measureY = cursor + 8;
+      cursor += measureRowH;
+    }
+    const npsRowH = 34;
+    if (bottom - cursor >= npsRowH + 10) {
+      npsTop = cursor + 3;
+      npsBottom = npsTop + npsRowH - 12;
+      cursor = npsTop + npsRowH;
+    }
+    return { measureY, npsTop, npsBottom, laneTop: cursor, laneBottom: bottom };
   }
 
   /** Judgment-position display radius — proportional to the fan radius (the actual
@@ -136,7 +207,7 @@ export class NotePreviewRenderer {
     ctx.fillStyle = COLORS.bg;
     ctx.fillRect(0, 0, w, h);
 
-    const { spawn, fanRadius } = this.geometry();
+    const { spawn, fanRadius, statsTop } = this.geometry();
     const judgeRadius = this.judgeRadius(fanRadius, s.sizeScale);
     const judgePositions: Point[] = [];
     for (let lane = 1; lane <= LANES; lane++) judgePositions.push(this.judgePos(spawn, fanRadius, lane));
@@ -277,5 +348,167 @@ export class NotePreviewRenderer {
         ctx.stroke();
       }
     }
+
+    const layout = this.statsLayout(statsTop);
+    if (layout.measureY !== null) this.drawMeasureRow(s.measureLabel, layout.measureY);
+    if (layout.npsTop !== null && layout.npsBottom !== null) {
+      this.drawDensityChart(s.measureNps, layout.npsTop, layout.npsBottom);
+    }
+    this.drawLaneStats(s.notes, layout.laneTop, layout.laneBottom);
+    if (s.hoverLane !== null) this.drawLaneTooltip(s.notes, s.hoverLane, layout.laneTop);
   }
+
+  private drawMeasureRow(label: string, y: number): void {
+    const { ctx, w } = this;
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = COLORS.labelStrong;
+    ctx.fillText(label, w / 2, y);
+  }
+
+  /** Notes/sec for the current measure (highlighted) and the 3 after it. */
+  private drawDensityChart(nps: number[], top: number, bottom: number): void {
+    const { ctx, w } = this;
+    if (nps.length === 0 || bottom - top < 6) return;
+    const margin = 8;
+    const gap = 6;
+    const barAreaH = bottom - top;
+    const barW = Math.max(4, (w - margin * 2 - gap * (nps.length - 1)) / nps.length);
+    const maxNps = Math.max(1e-6, ...nps);
+
+    ctx.font = "8px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    for (let i = 0; i < nps.length; i++) {
+      const x = margin + i * (barW + gap);
+      const cx = x + barW / 2;
+      const segH = (nps[i] / maxNps) * barAreaH;
+      ctx.fillStyle = i === 0 ? COLORS.densityNow : COLORS.density;
+      ctx.fillRect(x, bottom - segH, barW, segH);
+      ctx.fillStyle = COLORS.label;
+      ctx.fillText(nps[i].toFixed(1), cx, bottom + 9);
+    }
+  }
+
+  /** x, width of the lane-stats bar for the i-th displayed column (0 = leftmost, lane 9). */
+  private laneBarX(i: number): { x: number; barW: number } {
+    const margin = 8;
+    const gap = 3;
+    const barW = Math.max(2, (this.w - margin * 2 - gap * (LANES - 1)) / LANES);
+    return { x: margin + i * (barW + gap), barW };
+  }
+
+  /** Per-lane note counts, stacked by kind, in the area the fan leaves free below it. */
+  private drawLaneStats(notes: Note[], top: number, bottom: number): void {
+    const { ctx } = this;
+    const countH = 12;
+    const labelH = 11;
+    const barTop = top + countH;
+    const barBottom = bottom - labelH;
+    if (barBottom - barTop < 8) return; // panel too short — skip rather than overlap
+
+    const counts = laneCounts(notes);
+    const totals = counts.map((c) => c.tap + c.hold + c.star + c.slide);
+    const maxTotal = Math.max(1, ...totals);
+    const barAreaH = barBottom - barTop;
+    const kinds: (keyof LaneCounts)[] = ["tap", "hold", "star", "slide"];
+
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    for (let i = 0; i < LANES; i++) {
+      // Displayed left-to-right as lane 9 (leftmost) .. lane 1 (rightmost), matching the
+      // fan above and the game's own lane numbering.
+      const lane = LANES - i;
+      const c = counts[lane - 1];
+      const total = totals[lane - 1];
+      const { x, barW } = this.laneBarX(i);
+      const cx = x + barW / 2;
+
+      let y = barBottom;
+      for (const kind of kinds) {
+        const n = c[kind];
+        if (n <= 0) continue;
+        const segH = (n / maxTotal) * barAreaH;
+        ctx.fillStyle = COLORS[kind];
+        ctx.fillRect(x, y - segH, barW, segH);
+        y -= segH;
+      }
+
+      ctx.fillStyle = COLORS.label;
+      ctx.fillText(String(total), cx, barTop - 2);
+      ctx.fillText(String(lane), cx, bottom - 1);
+    }
+  }
+
+  /** Which lane (1-9) a canvas-space point falls over in the lane-stats chart, if any —
+   *  for editor.ts to drive hover-tooltip state from pointer events. */
+  laneAtPoint(x: number, y: number): number | null {
+    const { statsTop } = this.geometry();
+    const { laneTop, laneBottom } = this.statsLayout(statsTop);
+    if (y < laneTop || y > laneBottom) return null;
+    for (let i = 0; i < LANES; i++) {
+      const { x: bx, barW } = this.laneBarX(i);
+      if (x >= bx && x <= bx + barW) return LANES - i;
+    }
+    return null;
+  }
+
+  /** Breakdown for the hovered lane: its share of the whole chart, and each kind's count
+   *  and share within that lane. */
+  private drawLaneTooltip(notes: Note[], lane: number, laneTop: number): void {
+    const counts = laneCounts(notes)[lane - 1];
+    if (!counts) return;
+    const total = counts.tap + counts.hold + counts.star + counts.slide;
+    const grandTotal = notes.length;
+    const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0);
+
+    const kinds: { key: keyof LaneCounts; label: string }[] = [
+      { key: "tap", label: "Tap" },
+      { key: "hold", label: "Hold" },
+      { key: "star", label: "Star" },
+      { key: "slide", label: "Slide" },
+    ];
+    const lines = [`Lane ${lane}: ${total} (${pct(total, grandTotal)}%)`];
+    for (const { key, label } of kinds) {
+      const n = counts[key];
+      if (n > 0) lines.push(`${label}: ${n} (${pct(n, total)}%)`);
+    }
+
+    const { ctx, w } = this;
+    const i = LANES - lane;
+    const { x, barW } = this.laneBarX(i);
+    const cx = Math.min(Math.max(x + barW / 2, 4), w - 4);
+
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    const padX = 6;
+    const padY = 5;
+    const lineH = 11;
+    const textW = Math.max(...lines.map((l) => ctx.measureText(l).width));
+    const boxW = textW + padX * 2;
+    const boxH = lines.length * lineH + padY * 2 - 2;
+    const bx = Math.min(Math.max(cx - boxW / 2, 2), w - boxW - 2);
+    const by = Math.max(2, laneTop - boxH - 4);
+
+    roundRect(ctx, bx, by, boxW, boxH, 4);
+    ctx.fillStyle = COLORS.tooltipBg;
+    ctx.fill();
+    ctx.strokeStyle = COLORS.tooltipBorder;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = COLORS.labelStrong;
+    lines.forEach((line, idx) => {
+      ctx.fillText(line, bx + padX, by + padY + lineH * (idx + 1) - 3);
+    });
+  }
+}
+
+function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
 }
