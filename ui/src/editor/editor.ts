@@ -522,6 +522,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       el("span", { class: "mini-label", text: "🔊" }),
       volumeInput,
       timeDisplay,
+      el("button", { class: "btn", text: "Jump…", title: "Jump to measure (Ctrl+G)", onclick: () => openJumpDialog() }),
     ),
     el(
       "div",
@@ -825,6 +826,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       ["Ctrl+A", "Select all"],
       ["Space", "Play / pause"],
       ["Home / End", "Jump to start / end"],
+      ["Ctrl+G", "Jump to a measure number"],
       ["↑ / ↓", "Step playhead by one snap division"],
       ["Wheel", "Scroll · Ctrl+wheel zoom · middle-drag pan"],
       ["Click waveform", "Seek"],
@@ -837,6 +839,42 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         ...rows.flatMap(([k, v]) => [el("kbd", { text: k }), el("span", { text: v })]),
       ),
     );
+  }
+
+  function openJumpDialog(): void {
+    const curMeasure = Math.floor(timeSig().measureAt(tempo().beatAt(player.time))) + 1;
+    const measureInput = el("input", {
+      type: "number",
+      min: "1",
+      step: "1",
+      value: String(curMeasure),
+      title: "Measure number to jump to",
+    });
+
+    function doJump(): void {
+      const m = Math.max(1, Math.round(Number(measureInput.value)) || 1);
+      const beat = timeSig().beatAtMeasure(m - 1);
+      player.seek(tempo().timeAt(beat));
+      scrollToPlayhead(player.time);
+      requestDraw();
+      handle.close();
+    }
+    measureInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doJump();
+    });
+
+    const handle = openDialog(
+      "Jump to measure",
+      el(
+        "div",
+        { class: "row" },
+        el("span", { class: "mini-label", text: "Measure" }),
+        measureInput,
+        el("button", { class: "btn btn-primary", text: "Jump", onclick: doJump }),
+      ),
+    );
+    measureInput.focus();
+    measureInput.select();
   }
 
   function openTempoDialog(): void {
@@ -1601,6 +1639,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       void doSave();
       return;
     }
+    if (ctrl && e.key.toLowerCase() === "g") {
+      e.preventDefault();
+      openJumpDialog();
+      return;
+    }
     if (ctrl && (e.key.toLowerCase() === "c" || e.key.toLowerCase() === "x")) {
       const sel = d.selectedNotes();
       if (!sel.length) return;
@@ -1675,18 +1718,21 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         break;
       case "End":
         player.seek(duration());
+        scrollToPlayhead(player.time);
         requestDraw();
         break;
       case "ArrowUp":
       case "ArrowLeft":
         e.preventDefault();
         player.seek(snapTime(player.time - localStepSec(player.time) * 1.001));
+        scrollToPlayhead(player.time);
         requestDraw();
         break;
       case "ArrowDown":
       case "ArrowRight":
         e.preventDefault();
         player.seek(snapTime(player.time + localStepSec(player.time) * 1.001));
+        scrollToPlayhead(player.time);
         requestDraw();
         break;
     }
@@ -1698,16 +1744,22 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     needsDraw = true;
   }
 
+  /** Recenter the view if `cur` has strayed near/past the right edge or before the visible
+   *  range — the rule playback already follows every frame, reused for manual seeks (Home
+   *  excepted, which always resets to the very start) so the playhead never goes missing. */
+  function scrollToPlayhead(cur: number): void {
+    const span = renderer.timeSpan(viewState());
+    if (cur > scroll + span * 0.75 || cur < scroll) {
+      scroll = cur - span * 0.25;
+    }
+  }
+
   function frame(): void {
     if (disposed) return;
     if (player.playing) {
       needsDraw = true;
-      // keep the playhead in view
-      const span = renderer.timeSpan(viewState());
       const cur = player.displayTime;
-      if ((cur > scroll + span * 0.75 || cur < scroll) && gesture.type === "none") {
-        scroll = cur - span * 0.25;
-      }
+      if (gesture.type === "none") scrollToPlayhead(cur);
       timeDisplay.textContent = `${fmtTime(cur)} / ${fmtTime(player.duration)}`;
     }
     if (needsDraw) {

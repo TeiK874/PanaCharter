@@ -96,6 +96,7 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | `Ctrl+A` | Select all |
 | `Space` | Play / pause |
 | `Home` / `End` | Jump to start / end |
+| `Ctrl+G` / Jump… toolbar button | Jump to a measure number |
 | `↑` / `↓` (or `←` / `→`) | Step the playhead by one snap division |
 | Wheel | Scroll · `Ctrl`+wheel zoom · middle-drag pan |
 | Click the waveform | Seek |
