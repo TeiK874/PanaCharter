@@ -1691,7 +1691,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           // for a selection that mixes notes placed under different snap divisions
           // (e.g. triplets alongside quarter notes). round6 alone keeps notes that were
           // simultaneous in the source staying bit-identical after paste.
-          const t = round6(Math.max(0, base + c.dt));
+          const raw = Math.max(0, base + c.dt);
+          // ...but if this offset arithmetic lands within float noise of the CURRENT
+          // grid anyway (the overwhelmingly common case — the source note was itself
+          // on-grid), snap it exactly there. Otherwise a note placed afterward via a
+          // fresh click (always grid-derived) can land a microsecond off from this one
+          // even though both are "the same" beat, breaking the exact-equality chord
+          // check for notes meant to be simultaneous.
+          const grid = snapTime(raw);
+          const t = Math.abs(grid - raw) < 1e-4 ? grid : round6(raw);
           let lane = c.lane;
           if(shift) {
             lane = 10 - lane;
