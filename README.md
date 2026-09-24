@@ -86,6 +86,7 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | Slide: click, click, … | Chain points across lanes · drag the last point to end it in a hold |
 | `Esc` (Slide tool) | End the current slide chain |
 | Drag note | Move it · drag a hold's **tail** to resize |
+| Click an already-selected tap/star note | Flip it — and every other selected tap/star note — to the other kind (no drag) |
 | Right-click | Delete note |
 | Shift+click | Add to / remove from selection |
 | Drag on empty space (select tool) | Box select |

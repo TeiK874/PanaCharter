@@ -45,6 +45,10 @@ type Gesture =
       /** True if this is a lone, already-selected, not-yet-open slide chain tail — a
        *  plain click (no net movement) then opens it for editing instead of no-op'ing. */
       slideTogglePending: boolean;
+      /** True if the clicked note is an already-selected tap/star note — a plain click (no
+       *  net movement) then flips it, and every other selected tap/star note, to the other
+       *  kind instead of no-op'ing. */
+      kindTogglePending: boolean;
     }
   | { type: "box"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { type: "pan"; startScroll: number; startPos: number }
@@ -1316,6 +1320,12 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         d.selection.has(hit.note.id) &&
         d.isSlideChainTail(hit.note);
 
+      // A plain click (no drag) on an already-selected tap/star note flips it — and every
+      // other selected tap/star note along with it — to the other kind. A quick way to
+      // swap types without deleting and re-placing.
+      const kindTogglePending =
+        (hit.note.kind === "tap" || hit.note.kind === "star") && d.selection.has(hit.note.id);
+
       // Clicking a slide chain tail that's already open for editing lets you drag it
       // into a hold, or click again (no drag) to close it. Once it becomes a hold it
       // can't reopen — the chain is done, matching the server's "a hold ends the run".
@@ -1348,6 +1358,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         startLane: info.lane,
         orig,
         slideTogglePending: eligibleTail,
+        kindTogglePending,
         minLane,
         maxLane,
         part: hit.part === "tail" ? "tail" : "head",
@@ -1518,6 +1529,20 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       }
       case "move": {
         if (!gesture.resizeNote) d.resolveCollisions(new Set(gesture.orig.keys()));
+        if (gesture.kindTogglePending) {
+          // Rigid group move — any one note's position tells us whether the whole
+          // gesture was a plain click (no drag) or an actual move.
+          const [[firstId, firstOrig]] = gesture.orig;
+          const firstNote = d.byId(firstId);
+          const moved = !firstNote || firstNote.t !== firstOrig.t || firstNote.lane !== firstOrig.lane;
+          if (!moved) {
+            // a plain click, no drag — flip every selected tap/star note instead of no-op'ing
+            for (const id of gesture.orig.keys()) {
+              const n = d.byId(id);
+              if (n && (n.kind === "tap" || n.kind === "star")) n.kind = n.kind === "tap" ? "star" : "tap";
+            }
+          }
+        }
         d.commit(gesture.pre);
         if (gesture.slideTogglePending) {
           const [[id, orig]] = gesture.orig;
