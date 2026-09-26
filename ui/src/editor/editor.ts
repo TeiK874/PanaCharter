@@ -49,6 +49,10 @@ type Gesture =
        *  net movement) then flips it, and every other selected tap/star note, to the other
        *  kind instead of no-op'ing. */
       kindTogglePending: boolean;
+      /** Set once the drag actually displaces a note, even briefly — so dragging away and
+       *  back to the exact start still counts as a real drag, not a plain click, and
+       *  doesn't trigger slideTogglePending/kindTogglePending. */
+      moved: boolean;
     }
   | { type: "box"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { type: "pan"; startScroll: number; startPos: number }
@@ -725,7 +729,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   const saveSpan = el("span", { class: "save-state saved", text: "saved" });
   // Combo count is just the note total (see ChartDoc.comboCount), so show the kind
   // breakdown alongside it instead of a separate, always-identical note-count span.
-  const comboSpan = el("span", { title: "Combo (= note count for this difficulty), by kind" });
+  const comboSpan = el("span", { title: "Combo (= note count for this difficulty), by kind, with each kind's share of the total" });
   const selSpan = el("span");
   const cursorSpan = el("span");
   const npsSpan = el("span", { title: "Average notes/sec, and the densest 1-second window" });
@@ -776,8 +780,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     const notes = doc().notes;
     const byKind = { tap: 0, hold: 0, star: 0, slide: 0 };
     for (const n of notes) byKind[n.kind]++;
+    const pct = (n: number) => (notes.length > 0 ? Math.round((n / notes.length) * 100) : 0);
     comboSpan.textContent =
-      `combo ${doc().comboCount} (T${byKind.tap} H${byKind.hold} St${byKind.star} Sl${byKind.slide})`;
+      `combo ${doc().comboCount} ` +
+      `(T${byKind.tap} ${pct(byKind.tap)}% ` +
+      `H${byKind.hold} ${pct(byKind.hold)}% ` +
+      `St${byKind.star} ${pct(byKind.star)}% ` +
+      `Sl${byKind.slide} ${pct(byKind.slide)}%)`;
 
     if (notes.length > 0) {
       const times = notes.map((n) => n.t).sort((a, b) => a - b);
@@ -1359,6 +1368,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         orig,
         slideTogglePending: eligibleTail,
         kindTogglePending,
+        moved: false,
         minLane,
         maxLane,
         part: hit.part === "tail" ? "tail" : "head",
@@ -1463,7 +1473,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
             const o = gesture.orig.get(n.id);
             if (!o) continue;
             if (hasGrid) {
-              const onGrid = snapTime(o.t) === o.t;
+              // Within float noise of the grid counts as on it too (not just bit-exact) —
+              // re-deriving through the grid formula then self-heals any tiny pre-existing
+              // drift (e.g. from an older chart, or notes merged from elsewhere) instead of
+              // preserving it via the off-grid branch's additive math below.
+              const onGrid = Math.abs(snapTime(o.t) - o.t) < 1e-4;
               if (onGrid) {
                 const beatK = Math.round(tm.beatAt(o.t) * snap) + kd;
                 n.t = round6(Math.max(0, tm.timeAt(beatK / snap)));
@@ -1474,6 +1488,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
               n.t = round6(Math.max(0, o.t + rawDt));
             }
             n.lane = o.lane + dl;
+            // Tracks a REAL displacement at any point during the drag, not just a net
+            // change by release time — dragging away and back to the exact start should
+            // still count as an actual drag (see the "moved" field's doc comment).
+            if (n.t !== o.t || n.lane !== o.lane) gesture.moved = true;
           }
         }
         requestDraw();
@@ -1529,25 +1547,18 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       }
       case "move": {
         if (!gesture.resizeNote) d.resolveCollisions(new Set(gesture.orig.keys()));
-        if (gesture.kindTogglePending) {
-          // Rigid group move — any one note's position tells us whether the whole
-          // gesture was a plain click (no drag) or an actual move.
-          const [[firstId, firstOrig]] = gesture.orig;
-          const firstNote = d.byId(firstId);
-          const moved = !firstNote || firstNote.t !== firstOrig.t || firstNote.lane !== firstOrig.lane;
-          if (!moved) {
-            // a plain click, no drag — flip every selected tap/star note instead of no-op'ing
-            for (const id of gesture.orig.keys()) {
-              const n = d.byId(id);
-              if (n && (n.kind === "tap" || n.kind === "star")) n.kind = n.kind === "tap" ? "star" : "tap";
-            }
+        if (gesture.kindTogglePending && !gesture.moved) {
+          // a plain click, no drag — flip every selected tap/star note instead of no-op'ing
+          for (const id of gesture.orig.keys()) {
+            const n = d.byId(id);
+            if (n && (n.kind === "tap" || n.kind === "star")) n.kind = n.kind === "tap" ? "star" : "tap";
           }
         }
         d.commit(gesture.pre);
-        if (gesture.slideTogglePending) {
-          const [[id, orig]] = gesture.orig;
+        if (gesture.slideTogglePending && !gesture.moved) {
+          const [[id]] = gesture.orig;
           const n = d.byId(id);
-          if (n && n.t === orig.t && n.lane === orig.lane) {
+          if (n) {
             // a plain click, no drag — open the chain for editing instead of no-op'ing
             activeSlide = { slideId: n.slideId!, lastId: n.id, lastT: n.t, lastLane: n.lane };
           }
