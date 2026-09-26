@@ -1144,8 +1144,6 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       }),
     );
   }
-    );
-  }
 
   // --- settings / upload ----------------------------------------------------
   function openSettings(): void {
