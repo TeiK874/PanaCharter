@@ -170,9 +170,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
     const notes = doc().notes;
     const measureNps: number[] = [];
+    // A note placed exactly on a measure boundary went through the slot-based snap grid
+    // (tm.slotTime/slotAt), a different arithmetic path than this boundary's beatAt/timeAt
+    // — the two can disagree by a float ULP even for "the same" instant. Shifting the
+    // whole [secStart, secEnd) window earlier by a hair keeps such a note in the measure
+    // it visually starts, instead of leaking into the one before it.
+    const BOUNDARY_EPS = 1e-6;
     for (let i = 0; i < 4; i++) {
-      const secStart = tm.timeAt(ts.beatAtMeasure(measureIndex + i));
-      const secEnd = tm.timeAt(ts.beatAtMeasure(measureIndex + i + 1));
+      const secStart = tm.timeAt(ts.beatAtMeasure(measureIndex + i)) - BOUNDARY_EPS;
+      const secEnd = tm.timeAt(ts.beatAtMeasure(measureIndex + i + 1)) - BOUNDARY_EPS;
       const dur = Math.max(1e-6, secEnd - secStart);
       let count = 0;
       for (const n of notes) if (n.t >= secStart && n.t < secEnd) count++;
@@ -1498,14 +1504,20 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       }
       case "place-hold": {
         if (info) {
-          gesture.note.dur = Math.max(0, snapTime(info.t) - gesture.note.t);
+          // Round both endpoints before subtracting, not after: gesture.note.t is already
+          // round6'd (from place()) but snapTime(info.t) isn't, and subtracting a rounded
+          // value from an unrounded one — then rounding the DIFFERENCE separately at export —
+          // can round the wrong way when the true length sits right on a tie. Rounding first
+          // makes t + dur reconstruct the exact same grid instant a plain note placed there
+          // would get, which is what the server's exact-equality chord grouping needs.
+          gesture.note.dur = Math.max(0, round6(snapTime(info.t)) - round6(gesture.note.t));
         }
         requestDraw();
         return;
       }
       case "place-slide": {
         if (info) {
-          gesture.note.dur = Math.max(0, snapTime(info.t) - gesture.note.t);
+          gesture.note.dur = Math.max(0, round6(snapTime(info.t)) - round6(gesture.note.t));
         }
         requestDraw();
         return;
@@ -1514,7 +1526,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         if (!info || info.kind !== "lanes") return;
         if (gesture.resizeNote) {
           const n = gesture.resizeNote;
-          n.dur = Math.max(localStepSec(n.t), snapTime(info.t) - n.t);
+          n.dur = Math.max(localStepSec(n.t), round6(snapTime(info.t)) - round6(n.t));
         } else {
           // Move by an INTEGER number of grid slots (tempo.ts) — counted on the same
           // segment-local grid that's drawn and snapped to, so a drag across a tempo change
@@ -1790,7 +1802,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           } else {
             t = Math.max(0, raw);
           }
-          const dur = c.durBeat > 0 ? Math.max(0, tm.timeAt(tm.beatAt(t) + c.durBeat) - t) : 0;
+          const dur = c.durBeat > 0 ? Math.max(0, round6(tm.timeAt(tm.beatAt(t) + c.durBeat)) - round6(t)) : 0;
           let lane = c.lane;
           if(shift) {
             lane = 10 - lane;
