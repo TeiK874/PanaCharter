@@ -5,7 +5,8 @@ import { DIFFICULTIES } from "../types.js";
 import { Player } from "./audio.js";
 import { ChartDoc, allocateSlideId, round6 } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
-import { buildTempoMap, buildTimeSigMap } from "./tempo.js";
+import { buildTempoMap, buildTimeSigMap, gridStepSec } from "./tempo.js";
+import type { TempoMap } from "./tempo.js";
 import { Renderer } from "./render.js";
 import type { DrawState, Orientation } from "./render.js";
 import { NotePreviewRenderer } from "./preview.js";
@@ -127,11 +128,24 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   let previewApproachSec = loadPreviewApproachSec();
   let previewSizeScale = loadPreviewSizeScale();
   let previewHoverLane: number | null = null;
-  let clipboard: { dt: number; lane: number; kind: NoteKind; dur: number; slideId?: number }[] = [];
-  // Slide chain currently being extended by sequential clicks of the slide tool.
-  let activeSlide: { slideId: number; lastId: number; lastT: number; lastLane: number } | null = null;
+  // Offsets from the earliest copied note and hold lengths are kept in BEATS (via the tempo
+  // map), not seconds, so a phrase copied at one tempo pastes with the same rhythm at another.
+  let clipboard: { dBeat: number; lane: number; kind: NoteKind; durBeat: number; slideId?: number }[] = [];
+  // Slide chain currently being extended by sequential clicks of the slide tool. Its tail
+  // note is looked up by id on every read (openSlideTail) rather than cached, so a tail
+  // deleted or moved by any path can't leave a phantom origin behind.
+  let activeSlide: { slideId: number; lastId: number } | null = null;
   function endActiveSlide(): void {
     activeSlide = null;
+  }
+  /** The open chain's tail note, or null — ending the chain if that note is gone or no
+   *  longer an open (dur === 0) slide point of the chain. */
+  function openSlideTail(): Note | null {
+    if (!activeSlide) return null;
+    const tail = doc().byId(activeSlide.lastId);
+    if (tail && tail.kind === "slide" && tail.slideId === activeSlide.slideId && tail.dur === 0) return tail;
+    activeSlide = null;
+    return null;
   }
 
   const player = new Player();
@@ -174,12 +188,18 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   };
   const duration = () => (player.loaded ? player.duration : fallbackDuration());
 
-  function snapTime(t: number): number {
+  /** Nearest grid line to `t` under tempo map `tm` — the same segment-local lines render.ts
+   *  draws (see tempo.ts slotAt/slotTime). With no tempo changes this is bit for bit the
+   *  original `offset + round((t - offset) / step) * step`, which is what keeps notes from
+   *  older projects reading as on-grid (`snapTime(n.t) === n.t`). */
+  function snapWith(tm: TempoMap, t: number): number {
     const clamped = Math.max(0, t);
-    if (bpm() <= 0) return round6(clamped);
-    const tm = tempo();
-    const snappedBeat = Math.round(tm.beatAt(clamped) * snap) / snap;
-    return round6(Math.max(0, tm.timeAt(snappedBeat)));
+    return round6(Math.max(0, tm.slotTime(tm.slotAt(clamped, snap), snap)));
+  }
+
+  function snapTime(t: number): number {
+    if (bpm() <= 0) return round6(Math.max(0, t));
+    return snapWith(tempo(), t);
   }
 
   /** A sensible "one grid division" length in seconds at time `t` — always positive
@@ -187,8 +207,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
    *  hold/slide's length or the arrow-key playhead step. Not used to gate whether snapping
    *  happens at all — that's still the explicit `bpm() > 0` checks below. */
   function localStepSec(t: number): number {
-    const tm = tempo();
-    return tm.timeAt(tm.beatAt(t) + 1 / snap) - t;
+    return gridStepSec(tempo().bpmAt(t), snap);
   }
 
   function syncTicks(): void {
@@ -393,19 +412,41 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       }
     },
     onchange: () => {
-      const delta = editorMeta.offset_sec - committedOffset;
-      committedOffset = editorMeta.offset_sec;
-      if (delta === 0) return;
-      for (const d of docs.values()) {
-        d.edit(() => {
-          for (const n of d.notes) n.t = round6(Math.max(0, n.t + delta));
-        });
+      let v = editorMeta.offset_sec;
+      // The shift may not push the earliest note (of any difficulty) before the track
+      // start — clamping notes at 0 would stack them, which the server rejects when their
+      // kinds differ — so the offset itself is limited instead.
+      let first = Infinity;
+      for (const d of docs.values()) for (const n of d.notes) first = Math.min(first, n.t);
+      if (first + (v - committedOffset) < 0) {
+        v = committedOffset - first;
+        editorMeta.offset_sec = v;
+        offsetInput.value = String(v);
+        toast(`Offset limited to ${v.toFixed(3)}s — any lower would move the earliest note before the track start`, "error");
       }
-      // Tempo and time-signature changes are anchored to absolute time too — shift them
-      // with everything else so a change's position relative to the beat grid doesn't move.
-      for (const c of editorMeta.bpm_changes!) c.time_sec = round6(Math.max(0, c.time_sec + delta));
-      for (const c of editorMeta.time_sig_changes!) c.time_sec = round6(Math.max(0, c.time_sec + delta));
-      markDirty();
+      const delta = v - committedOffset;
+      if (delta !== 0) {
+        // Tempo changes are absolute times too, so they ride along with the notes; the map
+        // before/after lets notes that sat on the old grid be re-derived from the new grid
+        // formula (`t + delta` alone can land an ulp off it and read as off-grid).
+        const before = tempo();
+        committedOffset = v;
+        for (const c of editorMeta.bpm_changes!) c.time_sec += delta;
+        // Time-signature changes are anchored to absolute time too — shift them with
+        // everything else so a change's position relative to the beat grid doesn't move.
+        for (const c of editorMeta.time_sig_changes!) c.time_sec += delta;
+        const after = tempo();
+        const hasGrid = bpm() > 0;
+        const shift = (t: number): number => {
+          const moved = Math.max(0, t + delta);
+          return hasGrid && snapWith(before, t) === t ? snapWith(after, moved) : moved;
+        };
+        endActiveSlide();
+        // Not an undo step (see ChartDoc.remapTimes): each difficulty's history is carried
+        // along instead, so nothing is left half-undoable.
+        for (const d of docs.values()) d.remapTimes(shift);
+        markDirty();
+      }
       requestDraw();
     },
   });
@@ -892,24 +933,32 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
   function openTempoDialog(): void {
     const rowsHost = el("div", { class: "tempo-rows" });
+    const changes = () => editorMeta.bpm_changes!;
+    // buildTempoMap decides which rows count (tempo().dropped is the ones that don't);
+    // the dialog only reports that — one rule, never a row that silently does nothing.
+    const DEAD_HINT =
+      "This tempo change has no effect: it must come after the start offset and after the previous change (no two at the same time).";
 
     function renderRows(): void {
-      editorMeta.bpm_changes!.sort((a, b) => a.time_sec - b.time_sec);
+      changes().sort((a, b) => a.time_sec - b.time_sec);
+      const dead = new Set(tempo().dropped);
       rowsHost.replaceChildren(
-        ...editorMeta.bpm_changes!.map((c) => {
+        ...changes().map((c) => {
           const timeInput = el("input", {
             type: "number",
             step: "0.001",
             value: String(c.time_sec),
-            title: "Time this tempo change starts, in seconds",
+            title: dead.has(c) ? DEAD_HINT : "Time this tempo change starts, in seconds",
             onchange: () => {
               const v = Number(timeInput.value);
               if (Number.isFinite(v) && v >= 0) c.time_sec = v;
               markDirty();
               requestDraw();
               renderRows();
+              if (tempo().dropped.includes(c)) toast(DEAD_HINT, "error");
             },
           });
+          if (dead.has(c)) timeInput.style.outline = "2px solid var(--danger)";
           const bpmChangeInput = el("input", {
             type: "number",
             min: "1",
@@ -1055,7 +1104,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
             toast("The playhead is at or before the start — move it later first", "error");
             return;
           }
-          editorMeta.bpm_changes!.push({ time_sec: t, bpm: tempo().bpmAt(t) });
+          // the bpm in effect here — read before replacing an existing change at this
+          // time, so the replacement keeps its bpm rather than silently reverting it
+          const change = { time_sec: t, bpm: tempo().bpmAt(t) };
+          const existing = changes().filter((c) => Math.abs(c.time_sec - t) < 1e-9);
+          if (existing.length) {
+            editorMeta.bpm_changes = changes().filter((c) => !existing.includes(c));
+            toast(`Replaced the tempo change at ${t.toFixed(3)}s`);
+          }
+          changes().push(change);
           markDirty();
           requestDraw();
           renderRows();
@@ -1085,6 +1142,8 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           renderSigRows();
         },
       }),
+    );
+  }
     );
   }
 
@@ -1235,6 +1294,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
   function viewState(): DrawState {
     const tm = tempo();
+    const slideTail = openSlideTail();
     return {
       orientation,
       scroll,
@@ -1257,11 +1317,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           : null,
       box: gesture.type === "box" ? gesture : null,
       activeSlideFrom:
-        tool === "slide" && gesture.type === "none" && activeSlide
-          ? { t: activeSlide.lastT, lane: activeSlide.lastLane }
+        tool === "slide" && gesture.type === "none" && slideTail
+          ? { t: slideTail.t, lane: slideTail.lane }
           : null,
       activeSlideEditId:
-        gesture.type === "place-slide" ? gesture.note.id : tool === "slide" && activeSlide ? activeSlide.lastId : null,
+        gesture.type === "place-slide" ? gesture.note.id : tool === "slide" && slideTail ? slideTail.id : null,
     };
   }
 
@@ -1341,7 +1401,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       // An eligible tail that ISN'T open yet falls through to the normal move gesture
       // below instead — a drag just repositions it like any other note; only a plain
       // click with no net movement opens it (handled in finishGesture).
-      if (eligibleTail && activeSlide && activeSlide.lastId === hit.note.id) {
+      if (eligibleTail && openSlideTail()?.id === hit.note.id) {
         gesture = { type: "place-slide", pre: d.begin(), note: hit.note, slideId: hit.note.slideId!, wasActive: true };
         requestDraw();
         return;
@@ -1400,7 +1460,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       // activeSlide only ever points at an open (dur === 0) tail — see finishGesture's
       // "place-slide" case — so there's never a stale hold tail to undo here.
       const pre = d.begin();
-      const slideId = activeSlide ? activeSlide.slideId : allocateSlideId();
+      const slideId = openSlideTail() ? activeSlide!.slideId : allocateSlideId();
       const note = d.place(t, info.lane, "slide", 0, slideId);
       d.selection.clear();
       d.selection.add(note.id);
@@ -1454,15 +1514,16 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           const n = gesture.resizeNote;
           n.dur = Math.max(localStepSec(n.t), snapTime(info.t) - n.t);
         } else {
-          // Move by an INTEGER number of grid divisions, counted in BEATS (via the tempo
-          // map) rather than raw seconds — that stays correct across a BPM change instead
-          // of assuming one constant step song-wide. On-grid notes are re-derived from the
-          // grid formula (stays bit-exact), off-grid notes (BPM-mismatched imports) shift
-          // by the same number of divisions instead of being quantized to the wrong grid.
+          // Move by an INTEGER number of grid slots (tempo.ts) — counted on the same
+          // segment-local grid that's drawn and snapped to, so a drag across a tempo change
+          // continues on the next segment's lines instead of assuming one constant step
+          // song-wide. On-grid notes are re-derived from the grid formula (stays bit-exact);
+          // off-grid notes (BPM-mismatched imports) shift by the same seconds their nearest
+          // grid line does, keeping their distance from it instead of being quantized.
           const tm = tempo();
           const rawDt = info.t - gesture.startT;
           const hasGrid = bpm() > 0;
-          const kd = hasGrid ? Math.round((tm.beatAt(info.t) - tm.beatAt(gesture.startT)) * snap) : 0;
+          const kd = hasGrid ? tm.slotAt(info.t, snap) - tm.slotAt(gesture.startT, snap) : 0;
           // clamp the lane delta so the WHOLE selection stays in 1..9 —
           // per-note clamping compresses lanes and stacks notes
           const dl = Math.max(
@@ -1472,20 +1533,24 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           for (const n of d.notes) {
             const o = gesture.orig.get(n.id);
             if (!o) continue;
-            if (hasGrid) {
-              // Within float noise of the grid counts as on it too (not just bit-exact) —
-              // re-deriving through the grid formula then self-heals any tiny pre-existing
-              // drift (e.g. from an older chart, or notes merged from elsewhere) instead of
-              // preserving it via the off-grid branch's additive math below.
-              const onGrid = Math.abs(snapTime(o.t) - o.t) < 1e-4;
-              if (onGrid) {
-                const beatK = Math.round(tm.beatAt(o.t) * snap) + kd;
-                n.t = round6(Math.max(0, tm.timeAt(beatK / snap)));
-              } else {
-                n.t = round6(Math.max(0, tm.timeAt(tm.beatAt(o.t) + kd / snap)));
-              }
-            } else {
+            if (!hasGrid) {
               n.t = round6(Math.max(0, o.t + rawDt));
+            } else if (kd === 0) {
+              // No net movement keeps the exact original value: re-deriving it through the
+              // grid math can land an ulp off, which then reads as a real edit (a phantom
+              // undo entry, broken exact-time sim grouping, a failed "plain click" test in
+              // finishGesture's slideTogglePending/kindTogglePending checks).
+              n.t = o.t;
+            } else {
+              const slot = tm.slotAt(o.t, snap);
+              const here = tm.slotTime(slot, snap);
+              const there = tm.slotTime(slot + kd, snap);
+              // Within float noise of the grid counts as on it too (not just bit-exact) —
+              // this self-heals any tiny pre-existing drift (e.g. from an older chart, or
+              // notes merged from elsewhere) onto the new grid position, instead of just
+              // preserving it via the raw-distance shift.
+              const onGrid = Math.abs(snapWith(tm, o.t) - o.t) < 1e-4;
+              n.t = round6(Math.max(0, onGrid ? there : o.t + (there - here)));
             }
             n.lane = o.lane + dl;
             // Tracks a REAL displacement at any point during the drag, not just a net
@@ -1536,12 +1601,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           // a plain click on the already-open tail toggles it back to select mode
           endActiveSlide();
         } else {
-          activeSlide = {
-            slideId: gesture.slideId,
-            lastId: gesture.note.id,
-            lastT: gesture.note.t,
-            lastLane: gesture.note.lane,
-          };
+          activeSlide = { slideId: gesture.slideId, lastId: gesture.note.id };
         }
         break;
       }
@@ -1560,7 +1620,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           const n = d.byId(id);
           if (n) {
             // a plain click, no drag — open the chain for editing instead of no-op'ing
-            activeSlide = { slideId: n.slideId!, lastId: n.id, lastT: n.t, lastLane: n.lane };
+            activeSlide = { slideId: n.slideId!, lastId: n.id };
           }
         }
         break;
@@ -1683,34 +1743,50 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     if (ctrl && (e.key.toLowerCase() === "c" || e.key.toLowerCase() === "x")) {
       const sel = d.selectedNotes();
       if (!sel.length) return;
-      const base = Math.min(...sel.map((n) => n.t));
-      clipboard = sel.map((n) => ({ dt: n.t - base, lane: n.lane, kind: n.kind, dur: n.dur, slideId: n.slideId }));
-      if (e.key.toLowerCase() === "x") d.edit(() => d.remove([...d.selection]));
+      const tm = tempo();
+      const baseBeat = tm.beatAt(Math.min(...sel.map((n) => n.t)));
+      clipboard = sel.map((n) => ({
+        dBeat: tm.beatAt(n.t) - baseBeat,
+        lane: n.lane,
+        kind: n.kind,
+        durBeat: n.dur > 0 ? tm.beatAt(n.t + n.dur) - tm.beatAt(n.t) : 0,
+        slideId: n.slideId,
+      }));
+      if (e.key.toLowerCase() === "x") {
+        endActiveSlide();
+        d.edit(() => d.remove([...d.selection]));
+      }
       toast(`${clipboard.length} note${clipboard.length > 1 ? "s" : ""} ${e.key === "x" ? "cut" : "copied"}`);
       return;
     }
     if (ctrl && e.key.toLowerCase() === "v") {
       if (!clipboard.length) return;
-      const base = snapTime(player.time);
+      const tm = tempo();
+      const hasGrid = bpm() > 0;
+      const baseBeat = tm.beatAt(snapTime(player.time));
       // Distinct source chains get fresh ids so pasted copies don't merge into the originals.
       const slideIdMap = new Map<number, number>();
       d.edit(() => {
         d.selection.clear();
         for (const c of clipboard) {
-          // Keep each note's original offset from the first copied note as-is, rather
-          // than re-snapping to the CURRENT snap setting — that would distort spacing
-          // for a selection that mixes notes placed under different snap divisions
-          // (e.g. triplets alongside quarter notes). round6 alone keeps notes that were
-          // simultaneous in the source staying bit-identical after paste.
-          const raw = Math.max(0, base + c.dt);
-          // ...but if this offset arithmetic lands within float noise of the CURRENT
-          // grid anyway (the overwhelmingly common case — the source note was itself
-          // on-grid), snap it exactly there. Otherwise a note placed afterward via a
-          // fresh click (always grid-derived) can land a microsecond off from this one
-          // even though both are "the same" beat, breaking the exact-equality chord
-          // check for notes meant to be simultaneous.
-          const grid = snapTime(raw);
-          const t = Math.abs(grid - raw) < 1e-4 ? grid : round6(raw);
+          // Beat offsets land the copied rhythm at the tempo in effect here — paste across
+          // a tempo change keeps the same rhythm rather than the same raw seconds. Keep the
+          // computed offset as-is rather than forcing it onto the CURRENT snap setting
+          // (that would distort spacing for a selection mixing notes from different snap
+          // divisions, e.g. triplets alongside quarter notes) — but if it lands within
+          // float noise of the current grid anyway (the overwhelmingly common case, since
+          // the source note was itself on-grid), snap it exactly there so a note placed
+          // afterward via a fresh click lines up bit for bit (exact f64 equality is what
+          // the server's chord grouping relies on).
+          const raw = tm.timeAt(baseBeat + c.dBeat);
+          let t: number;
+          if (hasGrid) {
+            const grid = snapTime(raw);
+            t = Math.abs(grid - raw) < 1e-4 ? grid : Math.max(0, raw);
+          } else {
+            t = Math.max(0, raw);
+          }
+          const dur = c.durBeat > 0 ? Math.max(0, tm.timeAt(tm.beatAt(t) + c.durBeat) - t) : 0;
           let lane = c.lane;
           if(shift) {
             lane = 10 - lane;
@@ -1723,7 +1799,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
               slideIdMap.set(c.slideId, slideId);
             }
           }
-          const n = d.place(t, lane, c.kind, c.dur, slideId);
+          const n = d.place(t, lane, c.kind, dur, slideId);
           d.selection.add(n.id);
         }
       });
@@ -1747,7 +1823,10 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         break;
       case "Delete":
       case "Backspace":
-        if (d.selection.size) d.edit(() => d.remove([...d.selection]));
+        if (d.selection.size) {
+          endActiveSlide();
+          d.edit(() => d.remove([...d.selection]));
+        }
         break;
       case "Escape":
         endActiveSlide();

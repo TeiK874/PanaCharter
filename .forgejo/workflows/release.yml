@@ -41,12 +41,24 @@ jobs:
 
       - name: Build Linux Tauri binary
         shell: bash
-        # Release builds embed ui/dist into the binary (Tauri 2 does this
-        # automatically; no custom-protocol feature flag like Tauri 1).
+        # `tauri/custom-protocol` is what `tauri build` passes: without it the
+        # tauri crate compiles with cfg(dev) (bakes the build path into the
+        # binary and would load `devUrl` if one were ever configured).
+        # ui/dist is embedded either way.
         run: |
           . "$HOME/.cargo/env"
           cd src-tauri
-          cargo build --release
+          cargo build --release --features tauri/custom-protocol
+
+      - name: Run backend tests
+        shell: bash
+        # --release reuses the artefacts from the build step above. The
+        # native-audio round-trip test skips itself when no PulseAudio
+        # server is reachable, so it is a no-op on a headless runner.
+        run: |
+          . "$HOME/.cargo/env"
+          cd src-tauri
+          cargo test --release --features tauri/custom-protocol
 
       - name: Stage Linux artefacts
         shell: bash
@@ -110,7 +122,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           Push-Location src-tauri
-          cargo build --release
+          cargo build --release --features tauri/custom-protocol
           if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
           Pop-Location
 

@@ -248,10 +248,8 @@ fn skip_type(c: &mut Cur, version: u32, be: bool, enable_tree: bool, is_ref: boo
         c.skip(1)?; // isStrippedType
     }
     let script_index = if version >= 17 { c.u16(be)? as i16 } else { -1 };
-    if version >= 17 {
-        if (is_ref && script_index >= 0) || (!is_ref && class_id == 114) {
-            c.skip(16)?; // script id hash
-        }
+    if version >= 17 && ((is_ref && script_index >= 0) || (!is_ref && class_id == 114)) {
+        c.skip(16)?; // script id hash
     }
     c.skip(16)?; // old type hash
     if enable_tree {
@@ -450,14 +448,14 @@ pub fn extract_charts(bytes: &[u8]) -> R<Vec<ChartCandidate>> {
             let data = &content[start..end];
             match obj.class_id {
                 49 => {
-                    if let Ok((name, text)) = parse_text_asset(data, be) {
-                        if looks_textual(&text) {
-                            out.push(ChartCandidate {
-                                name,
-                                kind: "text".into(),
-                                content: text,
-                            });
-                        }
+                    if let Ok((name, text)) = parse_text_asset(data, be)
+                        && looks_textual(&text)
+                    {
+                        out.push(ChartCandidate {
+                            name,
+                            kind: "text".into(),
+                            content: text,
+                        });
                     }
                 }
                 114 => {
@@ -481,7 +479,7 @@ pub fn extract_charts(bytes: &[u8]) -> R<Vec<ChartCandidate>> {
 }
 
 /// Binary-body command: payload = raw bundle bytes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn bundle_extract_charts(
     request: tauri::ipc::Request<'_>,
 ) -> Result<Vec<ChartCandidate>, String> {

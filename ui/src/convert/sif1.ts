@@ -36,6 +36,14 @@ export const sif1Converter: ChartConverter = {
     // Slide chain grouping, matching the server's transcoder (chart.rs): notes sharing a
     // notes_level > 1 chain together in time order; 1/absent is SIF1's "not chained" default.
     const groups = new Map<number, Record<string, number>[]>();
+    // An unchained note. Effect 13 (slide ending in a hold) keeps its hold tail even with
+    // no chain partner — the server's transcoder treats effect 3 and 13 alike there.
+    const unchained = (n: Record<string, number>) => {
+      const effect = Number(n.effect);
+      const value = Number(n.effect_value) || 0;
+      const kind = (effect === 3 || effect === 13) && value > 0 ? "hold" : effect === 4 ? "star" : "tap";
+      return makeNote(Number(n.timing_sec), Number(n.position), kind, value);
+    };
     for (const n of raw) {
       const effect = Number(n.effect);
       if (effect === 11 || effect === 12 || effect === 13) {
@@ -46,19 +54,17 @@ export const sif1Converter: ChartConverter = {
           g.push(n);
           continue;
         }
+        orphanSwings++;
       }
-      const kind =
-        effect === 3 && Number(n.effect_value) > 0 ? "hold" : effect === 4 ? "star" : "tap";
-      if (effect === 11 || effect === 12 || effect === 13) orphanSwings++;
-      const note = makeNote(Number(n.timing_sec), Number(n.position), kind, Number(n.effect_value) || 0);
+      const note = unchained(n);
       if (note) notes.push(note);
       else dropped++;
     }
     for (const [level, g] of groups) {
       if (g.length < 2) {
-        // no chain partner -> plays as a plain tap, same fallback the server uses
+        // no chain partner -> plays unchained, same fallback the server uses
         orphanSwings++;
-        const note = makeNote(Number(g[0].timing_sec), Number(g[0].position), "tap", 0);
+        const note = unchained(g[0]);
         if (note) notes.push(note);
         else dropped++;
         continue;
@@ -83,7 +89,7 @@ export const sif1Converter: ChartConverter = {
         });
       });
     }
-    if (orphanSwings) warnings.push(`${orphanSwings} swing notes (effect 11/12/13) had no chain partner and became plain taps.`);
+    if (orphanSwings) warnings.push(`${orphanSwings} swing notes (effect 11/12/13) had no chain partner and were imported unchained — as plain taps, or as holds where they ended in one (effect 13).`);
     if (chains) warnings.push(`${chains} slide chain${chains > 1 ? "s" : ""} imported.`);
     if (dropped) warnings.push(`${dropped} notes had invalid time/lane and were dropped.`);
     return { notes, warnings };

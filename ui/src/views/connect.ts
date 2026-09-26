@@ -56,14 +56,34 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
     setStatus(loginStatus, true, `Logged in as ${session.uid}`);
   }
 
+  // One in-flight flag for both actions: the buttons and Enter on the password
+  // field all land here, and ew sessions are single-use — a second concurrent
+  // login would kick the first one's token right after it was stored.
+  let busy = false;
+  function setBusy(b: boolean): void {
+    busy = b;
+    connectBtn.disabled = b;
+    loginBtn.disabled = b;
+  }
+
   const connectBtn = el("button", {
     class: "btn",
     text: "Connect",
     onclick: () => void doConnect(),
   });
 
-  async function doConnect(): Promise<boolean> {
-    connectBtn.disabled = true;
+  async function doConnect(): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await connect();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Connect to the server in the input. The caller holds the busy flag. */
+  async function connect(): Promise<boolean> {
     setStatus(serverStatus, null, "Connecting…");
     try {
       const info = (await api.connect(serverInput.value)) as {
@@ -94,8 +114,6 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
     } catch (e) {
       setStatus(serverStatus, false, String(e));
       return false;
-    } finally {
-      connectBtn.disabled = false;
     }
   }
 
@@ -106,20 +124,18 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
   });
 
   async function doLogin(): Promise<void> {
+    if (busy) return;
     const raw = uidInput.value.trim();
     if (!/^\d{1,15}$/.test(raw) || !passInput.value) {
       setStatus(loginStatus, false, "Enter your numeric user ID (up to 15 digits) and transfer password.");
       return;
     }
     const uid = Number(raw);
-    loginBtn.disabled = true;
+    setBusy(true);
     setStatus(loginStatus, null, "Logging in…");
     try {
       if (!(await api.sessionInfo()).server || serverInput.value.trim()) {
-        if (!(await doConnect())) {
-          loginBtn.disabled = false;
-          return;
-        }
+        if (!(await connect())) return;
       }
       await api.login(uid, passInput.value);
       setStatus(loginStatus, true, `Logged in as ${uid}`);
@@ -128,8 +144,9 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
       ctx.goLibrary();
     } catch (e) {
       setStatus(loginStatus, false, String(e));
+    } finally {
+      setBusy(false);
     }
-    loginBtn.disabled = false;
   }
 
   passInput.addEventListener("keydown", (e) => {

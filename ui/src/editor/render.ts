@@ -1,4 +1,5 @@
 import type { Note, NoteKind } from "./chart.js";
+import { gridStepSec } from "./tempo.js";
 
 export type Orientation = "vertical" | "horizontal";
 
@@ -349,8 +350,12 @@ export class Renderer {
       if (segEnd < t0 || seg.startSec > t1) continue; // outside the visible window
       const lo = Math.max(t0, seg.startSec);
       const hi = Math.min(t1, segEnd);
-      const beat = 60 / seg.bpm;
-      const sub = beat / Math.max(1, s.snap);
+      // Lines are anchored at this segment's own start, `startSec + k * gridStepSec(...)` —
+      // the exact slots tempo.ts's slotTime describes and the editor snaps to, so a drawn
+      // line and a snapped click agree bit for bit.
+      const div = Math.max(1, s.snap);
+      const beat = gridStepSec(seg.bpm, 1);
+      const sub = gridStepSec(seg.bpm, div);
 
       if (sub * s.zoom >= 5 && s.snap > 1) {
         let k = Math.ceil((lo - seg.startSec) / sub - 1e-6);
@@ -360,16 +365,21 @@ export class Renderer {
         }
       }
       if (beat * s.zoom >= 4) {
-        let k = Math.ceil((lo - seg.startSec) / beat - 1e-6);
-        for (; seg.startSec + k * beat <= hi; k++) {
-          // Measure numbering counts continuously across tempo changes via startBeat,
-          // so it doesn't reset or jump at a BPM change.
-          const globalBeat = Math.round(seg.startBeat) + k;
+        // Beat numbering restarts with the grid at each change: a segment's first line takes
+        // the next whole beat number after the previous segment's last line (ceil of its
+        // continuous beat position), so numbers stay unique and increasing across a change.
+        // Measure numbering counts continuously across BOTH tempo and time-signature changes.
+        const firstBeat = Math.max(0, Math.ceil(seg.startBeat - 1e-9));
+        for (let k = Math.ceil((lo - seg.startSec) / beat - 1e-6); ; k++) {
+          // beat k is this segment's slot k*div — spelled with the slot formula, not
+          // `k * beat`, which can differ by an ulp for snaps that aren't a power of two
+          const t = seg.startSec + k * div * sub;
+          if (t > hi) break;
+          const globalBeat = firstBeat + k;
           const tsSeg = this.timeSigSegAt(s, globalBeat);
           const beatsPerMeasure = Math.max(1, tsSeg.beats);
           const beatInSeg = Math.round(globalBeat - tsSeg.startBeat);
           const measure = ((beatInSeg % beatsPerMeasure) + beatsPerMeasure) % beatsPerMeasure === 0;
-          const t = seg.startSec + k * beat;
           this.timeLine(t, s, measure ? COLORS.measure : COLORS.beat, measure ? 1.5 : 1);
           if (measure && beat * s.zoom * beatsPerMeasure > 40) {
             const { ctx } = this;

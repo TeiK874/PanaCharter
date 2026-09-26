@@ -42,7 +42,11 @@ pub struct SifNote {
     pub effect_value: f64,
     /// Slide chain id (effect 11/12/13 only): notes sharing a value > 1 chain together in
     /// time order. 0 (the wire default) reads the same as SIF1's own "not chained" 1.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    #[serde(
+        default,
+        deserialize_with = "de_notes_level",
+        skip_serializing_if = "is_zero_u32"
+    )]
     pub notes_level: u32,
 }
 
@@ -50,6 +54,17 @@ pub struct SifNote {
 fn de_num_u32<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     let v = f64::deserialize(d)?;
     Ok(v as u32)
+}
+
+/// `de_num_u32` for an optional field: imported charts are stored verbatim, and
+/// real ones carry `1`, `1.0`, `null`, negatives or nothing here — all of which
+/// must keep loading. Anything that isn't a non-negative finite number reads as 0.
+fn de_notes_level<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = Option::<f64>::deserialize(d)?;
+    Ok(match v {
+        Some(v) if v.is_finite() && v >= 0.0 => v as u32,
+        _ => 0,
+    })
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -254,6 +269,17 @@ fn remove_asset(dir: &Path, stem: &str) {
     }
 }
 
+/// Write via `<path>.tmp` + rename so a crash mid-write (autosave, import) can
+/// never leave a truncated file behind — an empty manifest.json makes
+/// `summarize` return None and the project vanish from the library.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    fs::write(&tmp, bytes).map_err(es)?;
+    fs::rename(&tmp, path).map_err(es)
+}
+
 fn mtime_ms(path: &Path) -> Option<u64> {
     fs::metadata(path)
         .and_then(|md| md.modified())
@@ -366,7 +392,7 @@ pub fn project_list(app: AppHandle) -> Result<Vec<ProjectSummary>, String> {
             }
         }
     }
-    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out.sort_by_key(|s| std::cmp::Reverse(s.modified_ms));
     Ok(out)
 }
 
@@ -390,16 +416,14 @@ pub fn project_create(app: AppHandle, name: String, artist: String) -> Result<Pr
         preview_length_sec: None,
         levels: Vec::new(),
     };
-    fs::write(
-        dir.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest).map_err(es)?,
-    )
-    .map_err(es)?;
-    fs::write(
-        dir.join("editor.json"),
-        serde_json::to_vec_pretty(&EditorMeta::default()).map_err(es)?,
-    )
-    .map_err(es)?;
+    write_atomic(
+        &dir.join("manifest.json"),
+        &serde_json::to_vec_pretty(&manifest).map_err(es)?,
+    )?;
+    write_atomic(
+        &dir.join("editor.json"),
+        &serde_json::to_vec_pretty(&EditorMeta::default()).map_err(es)?,
+    )?;
     summarize(&id, &dir).ok_or_else(|| "Failed to create project".into())
 }
 
@@ -435,24 +459,21 @@ pub fn project_save(
     charts: BTreeMap<u32, Vec<SifNote>>,
 ) -> Result<(), String> {
     let dir = project_dir(&app, &id)?;
-    fs::write(
-        dir.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest).map_err(es)?,
-    )
-    .map_err(es)?;
-    fs::write(
-        dir.join("editor.json"),
-        serde_json::to_vec_pretty(&editor).map_err(es)?,
-    )
-    .map_err(es)?;
+    write_atomic(
+        &dir.join("manifest.json"),
+        &serde_json::to_vec_pretty(&manifest).map_err(es)?,
+    )?;
+    write_atomic(
+        &dir.join("editor.json"),
+        &serde_json::to_vec_pretty(&editor).map_err(es)?,
+    )?;
     for level in 1..=4 {
         match charts.get(&level) {
             Some(notes) if !notes.is_empty() => {
-                fs::write(
-                    chart_path(&dir, level),
-                    serde_json::to_vec(notes).map_err(es)?,
-                )
-                .map_err(es)?;
+                write_atomic(
+                    &chart_path(&dir, level),
+                    &serde_json::to_vec(notes).map_err(es)?,
+                )?;
             }
             _ => {
                 let _ = fs::remove_file(chart_path(&dir, level));
@@ -471,19 +492,28 @@ pub fn project_delete(app: AppHandle, id: String) -> Result<(), String> {
 /// Binary-body command: payload = raw file bytes, project id in `x-project-id`.
 /// Format is sniffed from magic bytes, not trusted from the filename.
 #[tauri::command]
-pub fn project_set_audio(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+pub async fn project_set_audio(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
     let (id, bytes) = raw_body(&request)?;
     let dir = project_dir(&app, &id)?;
     let ext = sniff_audio_ext(bytes);
-    // validate by decoding BEFORE touching the old asset — a flac renamed
-    // .mp3 (or a webp sniffed as wav) should fail here with a clear message,
-    // not later during editor load or upload
-    crate::audio::decode_to_pcm(bytes.to_vec(), Some(ext))?;
-    let tmp = dir.join(format!("audio.{ext}.tmp"));
-    fs::write(&tmp, bytes).map_err(es)?;
-    remove_asset(&dir, "audio");
-    fs::rename(&tmp, dir.join(format!("audio.{ext}"))).map_err(es)?;
-    Ok(ext.to_string())
+    let bytes = bytes.to_vec();
+    // decoding a whole track takes seconds — keep it off the webview thread
+    tauri::async_runtime::spawn_blocking(move || {
+        // validate by decoding BEFORE touching the old asset — a flac renamed
+        // .mp3 (or a webp sniffed as wav) should fail here with a clear message,
+        // not later during editor load or upload
+        crate::audio::decode_to_pcm(bytes.clone(), Some(ext))?;
+        let tmp = dir.join(format!("audio.{ext}.tmp"));
+        fs::write(&tmp, &bytes).map_err(es)?;
+        remove_asset(&dir, "audio");
+        fs::rename(&tmp, dir.join(format!("audio.{ext}"))).map_err(es)?;
+        Ok(ext.to_string())
+    })
+    .await
+    .map_err(es)?
 }
 
 #[tauri::command]
@@ -502,15 +532,20 @@ pub fn project_set_jacket(app: AppHandle, request: tauri::ipc::Request<'_>) -> R
 /// Response layout (little-endian): `u32 sample_rate | u32 channels | u32 frames |
 /// i16 interleaved samples…`.
 #[tauri::command]
-pub fn project_load_audio(
+pub async fn project_load_audio(
     app: AppHandle,
     native: tauri::State<'_, crate::audio_native::NativeAudio>,
     id: String,
 ) -> Result<tauri::ipc::Response, String> {
     let dir = project_dir(&app, &id)?;
     let (ext, path) = find_asset(&dir, "audio").ok_or("Project has no audio yet")?;
-    let bytes = fs::read(path).map_err(es)?;
-    let (rate, channels, pcm) = crate::audio::decode_to_pcm(bytes, Some(&ext))?;
+    // decoding a whole track takes seconds — keep it off the webview thread
+    let (rate, channels, pcm) = tauri::async_runtime::spawn_blocking(move || {
+        let bytes = fs::read(path).map_err(es)?;
+        crate::audio::decode_to_pcm(bytes, Some(&ext))
+    })
+    .await
+    .map_err(es)??;
     // hand the native player its copy — it becomes the playback engine when
     // PulseAudio is reachable; the returned PCM still drives the waveform
     native.set_pcm(rate, channels, pcm.clone());
@@ -591,7 +626,7 @@ fn slug(name: &str) -> String {
 }
 
 /// Export the project as a server-compatible package zip; returns the written path.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_export(app: AppHandle, id: String) -> Result<String, String> {
     let dir = project_dir(&app, &id)?;
     let manifest = read_manifest(&dir)?;
@@ -613,7 +648,7 @@ pub fn project_export(app: AppHandle, id: String) -> Result<String, String> {
             Ok,
         )?;
     let path = out_dir.join(format!("custom_song_{}.zip", slug(&manifest.name)));
-    fs::write(&path, bytes).map_err(es)?;
+    write_atomic(&path, &bytes)?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -682,34 +717,30 @@ pub fn import_zip_bytes(app: &AppHandle, bytes: Vec<u8>) -> Result<ProjectSummar
     let id = new_id();
     let dir = projects_dir(app)?.join(&id);
     fs::create_dir_all(&dir).map_err(es)?;
-    fs::write(
-        dir.join("manifest.json"),
-        serde_json::to_vec_pretty(&manifest).map_err(es)?,
-    )
-    .map_err(es)?;
-    fs::write(
-        dir.join("editor.json"),
-        serde_json::to_vec_pretty(&editor.unwrap_or_default()).map_err(es)?,
-    )
-    .map_err(es)?;
-    fs::write(
-        dir.join(format!("jacket.{}", sniff_image_ext(&jacket))),
+    write_atomic(
+        &dir.join("manifest.json"),
+        &serde_json::to_vec_pretty(&manifest).map_err(es)?,
+    )?;
+    write_atomic(
+        &dir.join("editor.json"),
+        &serde_json::to_vec_pretty(&editor.unwrap_or_default()).map_err(es)?,
+    )?;
+    write_atomic(
+        &dir.join(format!("jacket.{}", sniff_image_ext(&jacket))),
         &jacket,
-    )
-    .map_err(es)?;
-    fs::write(
-        dir.join(format!("audio.{}", sniff_audio_ext(&audio))),
+    )?;
+    write_atomic(
+        &dir.join(format!("audio.{}", sniff_audio_ext(&audio))),
         &audio,
-    )
-    .map_err(es)?;
+    )?;
     for (level, data) in charts {
-        fs::write(chart_path(&dir, level), data).map_err(es)?;
+        write_atomic(&chart_path(&dir, level), &data)?;
     }
     summarize(&id, &dir).ok_or_else(|| "Failed to read imported project".into())
 }
 
 /// Binary-body command: payload = package zip bytes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn project_import_zip(
     app: AppHandle,
     request: tauri::ipc::Request<'_>,
@@ -732,27 +763,24 @@ pub(crate) fn create_project_files(
     let id = new_id();
     let dir = projects_dir(app)?.join(&id);
     fs::create_dir_all(&dir).map_err(es)?;
-    fs::write(
-        dir.join("manifest.json"),
-        serde_json::to_vec_pretty(manifest).map_err(es)?,
-    )
-    .map_err(es)?;
-    fs::write(
-        dir.join("editor.json"),
-        serde_json::to_vec_pretty(&EditorMeta::default()).map_err(es)?,
-    )
-    .map_err(es)?;
+    write_atomic(
+        &dir.join("manifest.json"),
+        &serde_json::to_vec_pretty(manifest).map_err(es)?,
+    )?;
+    write_atomic(
+        &dir.join("editor.json"),
+        &serde_json::to_vec_pretty(&EditorMeta::default()).map_err(es)?,
+    )?;
     for (level, notes) in charts {
         if (1..=4).contains(level) && !notes.is_empty() {
-            fs::write(chart_path(&dir, *level), serde_json::to_vec(notes).map_err(es)?)
-                .map_err(es)?;
+            write_atomic(&chart_path(&dir, *level), &serde_json::to_vec(notes).map_err(es)?)?;
         }
     }
     if let Some(png) = jacket_png {
-        fs::write(dir.join("jacket.png"), png).map_err(es)?;
+        write_atomic(&dir.join("jacket.png"), png)?;
     }
     if let Some((ext, bytes)) = audio {
-        fs::write(dir.join(format!("audio.{ext}")), bytes).map_err(es)?;
+        write_atomic(&dir.join(format!("audio.{ext}")), bytes)?;
     }
     summarize(&id, &dir).ok_or_else(|| "Failed to create project".into())
 }
@@ -817,7 +845,7 @@ pub fn record_upload(
     };
     editor.last_upload = Some(lu.clone());
     let bytes = serde_json::to_vec_pretty(&editor).ok()?;
-    fs::write(dir.join("editor.json"), bytes).ok()?;
+    write_atomic(&dir.join("editor.json"), &bytes).ok()?;
     Some(lu)
 }
 
@@ -853,9 +881,9 @@ pub fn collect_update(app: &AppHandle, id: &str) -> Result<UpdateBundle, String>
         .collect::<Result<Vec<_>, String>>()?;
     let removed_levels = (1..=4).filter(|l| !chart_path(&dir, *l).exists()).collect();
 
-    let changed_asset = |stem: &str,
-                         recorded: Option<u64>|
-     -> Result<(Option<(String, Vec<u8>)>, Option<u64>), String> {
+    /// (asset to send if it changed, its current mtime to record)
+    type ChangedAsset = (Option<(String, Vec<u8>)>, Option<u64>);
+    let changed_asset = |stem: &str, recorded: Option<u64>| -> Result<ChangedAsset, String> {
         match find_asset(&dir, stem) {
             Some((ext, path)) => {
                 let now = mtime_ms(&path);
@@ -880,4 +908,33 @@ pub fn collect_update(app: &AppHandle, id: &str) -> Result<UpdateBundle, String>
         audio_mtime_ms,
         jacket_mtime_ms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Charts on disk are stored verbatim from imports, so every shape of
+    /// `notes_level` that SIF1 tooling emits has to keep loading.
+    #[test]
+    fn notes_level_tolerates_wild_charts() {
+        let load = |extra: &str| -> u32 {
+            let json = format!(r#"{{"timing_sec":1.5,"position":5,"effect":11{extra}}}"#);
+            serde_json::from_str::<SifNote>(&json).unwrap().notes_level
+        };
+        assert_eq!(load(""), 0);
+        assert_eq!(load(r#","notes_level":null"#), 0);
+        assert_eq!(load(r#","notes_level":2"#), 2);
+        assert_eq!(load(r#","notes_level":1.0"#), 1);
+        assert_eq!(load(r#","notes_level":-1"#), 0);
+        // and zero stays off the wire
+        let note = SifNote {
+            timing_sec: 1.0,
+            position: 1,
+            effect: 1,
+            effect_value: 0.0,
+            notes_level: 0,
+        };
+        assert!(!serde_json::to_string(&note).unwrap().contains("notes_level"));
+    }
 }

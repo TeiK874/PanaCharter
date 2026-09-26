@@ -60,24 +60,42 @@ export async function attempt<T>(action: () => Promise<T>): Promise<T | undefine
 export interface DialogHandle {
   root: HTMLDialogElement;
   close: () => void;
+  /** Lock the dialog while an action is in flight: the ✕ button is disabled
+   *  and Esc is ignored. `close()` itself is unaffected, for the owner. */
+  setBusy: (busy: boolean) => void;
 }
 
 export function openDialog(title: string, ...content: Child[]): DialogHandle {
   const root = el("dialog", { class: "dialog" });
+  let busy = false;
   const closeBtn = el("button", {
     class: "btn btn-ghost dialog-close",
     text: "✕",
     title: "Close",
-    onclick: () => root.close(),
+    onclick: () => {
+      if (!busy) root.close();
+    },
   });
   root.append(
     el("div", { class: "dialog-head" }, el("h2", { text: title }), closeBtn),
     ...content.filter((c): c is Node | string => c != null && c !== false),
   );
+  // Esc arrives as `cancel`; the ✕ button calls close() directly, so both
+  // paths have to check the lock
+  root.addEventListener("cancel", (e) => {
+    if (busy) e.preventDefault();
+  });
   root.addEventListener("close", () => root.remove());
   document.body.append(root);
   root.showModal();
-  return { root, close: () => root.close() };
+  return {
+    root,
+    close: () => root.close(),
+    setBusy: (b) => {
+      busy = b;
+      closeBtn.disabled = b;
+    },
+  };
 }
 
 export function confirmDialog(message: string, action = "Delete"): Promise<boolean> {

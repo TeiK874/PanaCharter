@@ -23,11 +23,17 @@ export interface LibraryCtx {
 type TabName = "local" | "mine" | "browse";
 
 export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLElement; dispose: () => void }> {
+  /** Object URLs owned by the render currently on screen. */
   const blobUrls: string[] = [];
+  let disposed = false;
   function blobUrl(bytes: ArrayBuffer): string {
     const url = URL.createObjectURL(new Blob([bytes]));
     blobUrls.push(url);
     return url;
+  }
+  function revokeBlobUrls(): void {
+    for (const url of blobUrls) URL.revokeObjectURL(url);
+    blobUrls.length = 0;
   }
 
   const content = el("div", {});
@@ -51,6 +57,9 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
   async function renderTab(): Promise<void> {
     const gen = ++renderGen; // a newer render (tab switch) wins
     content.replaceChildren(el("p", { class: "empty-note", text: "Loading…" }));
+    // the previous render's images just left the DOM; loads still in flight for
+    // it see the bumped renderGen and never create a URL
+    revokeBlobUrls();
     let rendered: HTMLElement;
     try {
       if (activeTab === "local") rendered = await renderLocal();
@@ -68,8 +77,12 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
 
   function jacketEl(load: () => Promise<ArrayBuffer>): HTMLElement {
     const holder = el("div", { class: "jacket", text: "♪" });
+    const gen = renderGen;
     void load()
       .then((bytes) => {
+        // a re-render or dispose raced this load: the card is gone, and a URL
+        // created now would belong to nobody and never be revoked
+        if (disposed || gen !== renderGen) return;
         const img = el("img", { class: "jacket", alt: "" }) as HTMLImageElement;
         img.src = blobUrl(bytes);
         holder.replaceWith(img);
@@ -401,7 +414,8 @@ export async function createLibraryView(ctx: LibraryCtx): Promise<{ root: HTMLEl
   return {
     root,
     dispose() {
-      for (const url of blobUrls) URL.revokeObjectURL(url);
+      disposed = true;
+      revokeBlobUrls();
     },
   };
 }
