@@ -193,11 +193,15 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
    *  original `offset + round((t - offset) / step) * step`, which is what keeps notes from
    *  older projects reading as on-grid (`snapTime(n.t) === n.t`). */
   function snapWith(tm: TempoMap, t: number): number {
+    // slotTime is a pure function of an integer slot number, so two notes landing on the
+    // same slot come out bit-identical without needing to round — no float noise to chase.
     const clamped = Math.max(0, t);
-    return round6(Math.max(0, tm.slotTime(tm.slotAt(clamped, snap), snap)));
+    return Math.max(0, tm.slotTime(tm.slotAt(clamped, snap), snap));
   }
 
   function snapTime(t: number): number {
+    // No tempo at all means no slot grid to land on — round6 is the only thing keeping
+    // two notes placed "at the same" raw time bit-identical here.
     if (bpm() <= 0) return round6(Math.max(0, t));
     return snapWith(tempo(), t);
   }
@@ -1546,9 +1550,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
               // Within float noise of the grid counts as on it too (not just bit-exact) —
               // this self-heals any tiny pre-existing drift (e.g. from an older chart, or
               // notes merged from elsewhere) onto the new grid position, instead of just
-              // preserving it via the raw-distance shift.
+              // preserving it via the raw-distance shift. `there` is a pure function of an
+              // integer slot, so notes sharing one land bit-identical without rounding;
+              // the off-grid shift is real float arithmetic, so it still gets rounded.
               const onGrid = Math.abs(snapWith(tm, o.t) - o.t) < 1e-4;
-              n.t = round6(Math.max(0, onGrid ? there : o.t + (there - here)));
+              n.t = onGrid ? Math.max(0, there) : round6(Math.max(0, o.t + (there - here)));
             }
             n.lane = o.lane + dl;
             // Tracks a REAL displacement at any point during the drag, not just a net
