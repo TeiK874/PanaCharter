@@ -30,7 +30,8 @@ fn es<E: std::fmt::Display>(e: E) -> String {
 
 /// One note in the SIF1/NPPS4 upload schema (§4a). Lane `position` is 1–9
 /// right-to-left; `effect` 1=tap, 3=hold (+`effect_value` duration), 4=star,
-/// 11/12=slide, 13=slide ending in a hold (+`effect_value` duration).
+/// 8=flick, 10=hold ending in a flick (+`effect_value` duration), 11/12=slide,
+/// 13=slide ending in a hold (+`effect_value` duration), 14=slide ending in a flick.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SifNote {
     pub timing_sec: f64,
@@ -40,8 +41,8 @@ pub struct SifNote {
     pub effect: u32,
     #[serde(default)]
     pub effect_value: f64,
-    /// Slide chain id (effect 11/12/13 only): notes sharing a value > 1 chain together in
-    /// time order. 0 (the wire default) reads the same as SIF1's own "not chained" 1.
+    /// Slide chain id (effect 11/12/13/14 only): notes sharing a value > 1 chain together
+    /// in time order. 0 (the wire default) reads the same as SIF1's own "not chained" 1.
     #[serde(
         default,
         deserialize_with = "de_notes_level",

@@ -3,7 +3,6 @@
 
 import type { ChartConverter, ImportedChart } from "./index.js";
 import type { SifNote } from "../types.js";
-import { makeNote } from "./util.js";
 
 export const sif1Converter: ChartConverter = {
   id: "sif1",
@@ -36,17 +35,30 @@ export const sif1Converter: ChartConverter = {
     // Slide chain grouping, matching the server's transcoder (chart.rs): notes sharing a
     // notes_level > 1 chain together in time order; 1/absent is SIF1's "not chained" default.
     const groups = new Map<number, Record<string, number>[]>();
-    // An unchained note. Effect 13 (slide ending in a hold) keeps its hold tail even with
-    // no chain partner — the server's transcoder treats effect 3 and 13 alike there.
-    const unchained = (n: Record<string, number>) => {
+    // An unchained note. Effect 13/10 (ending in a hold, normal or flick-released) keep
+    // their hold tail even with no chain partner — the server's transcoder treats effect
+    // 3/10/13 alike there. A lone effect 14 plays as a plain flick, same as effect 8. Built
+    // directly (not through the lossy generic makeNote helper) so effect 8/10/14 survive
+    // the round trip instead of collapsing into 1/3.
+    const unchained = (n: Record<string, number>): SifNote | null => {
+      const timing_sec = Number(n.timing_sec);
+      const position = Number(n.position);
+      if (!Number.isFinite(timing_sec) || timing_sec < 0 || !Number.isFinite(position) || position < 1 || position > 9) {
+        return null;
+      }
       const effect = Number(n.effect);
       const value = Number(n.effect_value) || 0;
-      const kind = (effect === 3 || effect === 13) && value > 0 ? "hold" : effect === 4 ? "star" : "tap";
-      return makeNote(Number(n.timing_sec), Number(n.position), kind, value);
+      const isHold = (effect === 3 || effect === 10) && value > 0;
+      return {
+        timing_sec,
+        position: Math.round(position),
+        effect: isHold ? effect : effect === 4 ? 4 : effect === 8 || effect === 14 ? 8 : 1,
+        effect_value: isHold ? value : 0,
+      };
     };
     for (const n of raw) {
       const effect = Number(n.effect);
-      if (effect === 11 || effect === 12 || effect === 13) {
+      if (effect === 11 || effect === 12 || effect === 13 || effect === 14) {
         const level = Number(n.notes_level) || 1;
         if (level > 1) {
           let g = groups.get(level);
@@ -73,7 +85,8 @@ export const sif1Converter: ChartConverter = {
       const ordered = [...g].sort((a, b) => Number(a.timing_sec) - Number(b.timing_sec));
       ordered.forEach((n, i) => {
         const isLast = i === ordered.length - 1;
-        const isHoldEnd = isLast && Number(n.effect) === 13 && Number(n.effect_value) > 0;
+        const isFlickEnd = isLast && Number(n.effect) === 14;
+        const isHoldEnd = isLast && !isFlickEnd && Number(n.effect) === 13 && Number(n.effect_value) > 0;
         const timing_sec = Number(n.timing_sec);
         const position = Number(n.position);
         if (!Number.isFinite(timing_sec) || timing_sec < 0 || !Number.isFinite(position) || position < 1 || position > 9) {
@@ -83,7 +96,7 @@ export const sif1Converter: ChartConverter = {
         notes.push({
           timing_sec,
           position: Math.round(position),
-          effect: isHoldEnd ? 13 : 11,
+          effect: isFlickEnd ? 14 : isHoldEnd ? 13 : 11,
           effect_value: isHoldEnd ? Number(n.effect_value) : 0,
           notes_level: level,
         });

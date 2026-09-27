@@ -1,6 +1,6 @@
 import type { SifNote } from "../types.js";
 
-export type NoteKind = "tap" | "hold" | "star" | "slide";
+export type NoteKind = "tap" | "hold" | "star" | "slide" | "flick";
 
 export interface Note {
   id: number;
@@ -10,10 +10,15 @@ export interface Note {
   /** Lane 1–9, right-to-left (1 = rightmost, matching the game). */
   lane: number;
   kind: NoteKind;
-  /** Hold duration, seconds (0 for tap/star). For a slide note, only meaningful on the
-   *  chronologically LAST member of its chain: > 0 means the slide settles into a hold
+  /** Hold duration, seconds (0 for tap/star/flick). For a slide note, only meaningful on
+   *  the chronologically LAST member of its chain: > 0 means the slide settles into a hold
    *  there (effect 13) instead of ending as a plain point (effect 11/12). */
   dur: number;
+  /** Marks the RELEASE as a flick instead of a normal one. Meaningful only for kind ===
+   *  "hold" (effect 10 instead of 3) and for the chronologically LAST member of a slide
+   *  chain (effect 14 instead of 11/13) — mutually exclusive with that member's dur, since
+   *  a flick carries no duration of its own. Ignored everywhere else. */
+  flickEnd?: boolean;
   /** Slide chain id (kind === "slide" only). Notes sharing a slideId link together in
    *  time order, each link crossing lanes — see allocateSlideId(). */
   slideId?: number;
@@ -54,21 +59,29 @@ export class ChartDoc {
 
   static fromSif(sif: SifNote[]): ChartDoc {
     const doc = new ChartDoc();
-    // Slide chain grouping: notes_level > 1 groups effect 11/12/13 notes together, same
+    // Slide chain grouping: notes_level > 1 groups effect 11/12/13/14 notes together, same
     // rule the server's transcoder uses (chart.rs: notes_level <= 1 is SIF1's own
     // "not chained" default and must not be treated as a group).
     const chains = new Map<number, SifNote[]>();
-    // An unchained note: a hold for effect 3 — and for 13, because the server's transcoder
-    // keeps a hold tail on effect 13 whether or not the note has chain partners — a star
-    // for 4, a plain tap for anything else.
+    // An unchained note: a hold for effect 3 (or 10, ending in a flick instead of a normal
+    // release) — and for 13, because the server's transcoder keeps a hold tail on effect 13
+    // whether or not the note has chain partners — a star for 4, a flick for 8 (a lone
+    // effect 14 plays the same way once it has no chain partner), a plain tap otherwise.
     const unchained = (n: SifNote): Note => {
-      const hold = (n.effect === 3 || n.effect === 13) && n.effect_value > 0;
-      const kind: NoteKind = hold ? "hold" : n.effect === 4 ? "star" : "tap";
-      return { id: nextId++, t: n.timing_sec, lane: n.position, kind, dur: hold ? n.effect_value : 0 };
+      const hold = (n.effect === 3 || n.effect === 10 || n.effect === 13) && n.effect_value > 0;
+      const kind: NoteKind = hold ? "hold" : n.effect === 4 ? "star" : n.effect === 8 || n.effect === 14 ? "flick" : "tap";
+      return {
+        id: nextId++,
+        t: n.timing_sec,
+        lane: n.position,
+        kind,
+        dur: hold ? n.effect_value : 0,
+        flickEnd: hold && n.effect === 10 ? true : undefined,
+      };
     };
     for (const n of sif) {
       if (n.position < 1 || n.position > 9 || n.timing_sec < 0) continue;
-      if (n.effect === 11 || n.effect === 12 || n.effect === 13) {
+      if (n.effect === 11 || n.effect === 12 || n.effect === 13 || n.effect === 14) {
         const level = n.notes_level ?? 1;
         if (level > 1) {
           let group = chains.get(level);
@@ -90,7 +103,8 @@ export class ChartDoc {
       ordered.forEach((n, i) => {
         const isLast = i === ordered.length - 1;
         const dur = isLast && n.effect === 13 && n.effect_value > 0 ? n.effect_value : 0;
-        doc.notes.push({ id: nextId++, t: n.timing_sec, lane: n.position, kind: "slide", dur, slideId });
+        const flickEnd = isLast && n.effect === 14 ? true : undefined;
+        doc.notes.push({ id: nextId++, t: n.timing_sec, lane: n.position, kind: "slide", dur, flickEnd, slideId });
       });
     }
     doc.sort();
@@ -115,11 +129,13 @@ export class ChartDoc {
     }
     return this.notes.map((n) => {
       if (n.kind === "slide") {
-        const isHoldEnd = chainTailIds.has(n.id) && n.dur > 0;
+        const isTail = chainTailIds.has(n.id);
+        const isFlickEnd = isTail && n.flickEnd === true;
+        const isHoldEnd = isTail && !isFlickEnd && n.dur > 0;
         return {
           timing_sec: round6(n.t),
           position: n.lane,
-          effect: isHoldEnd ? 13 : 11,
+          effect: isFlickEnd ? 14 : isHoldEnd ? 13 : 11,
           effect_value: isHoldEnd ? round6(n.dur) : 0,
           notes_level: n.slideId,
         };
@@ -127,7 +143,7 @@ export class ChartDoc {
       return {
         timing_sec: round6(n.t),
         position: n.lane,
-        effect: n.kind === "hold" ? 3 : n.kind === "star" ? 4 : 1,
+        effect: n.kind === "hold" ? (n.flickEnd ? 10 : 3) : n.kind === "star" ? 4 : n.kind === "flick" ? 8 : 1,
         effect_value: n.kind === "hold" ? round6(n.dur) : 0,
       };
     });

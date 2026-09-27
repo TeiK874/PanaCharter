@@ -72,6 +72,8 @@ const COLORS = {
   slideBody: "rgba(180, 140, 255, 0.30)",
   slideChain: "rgba(180, 140, 255, 0.55)",
   slidePreview: "rgba(180, 140, 255, 0.35)",
+  flick: "#4ea8ff",
+  flickRim: "#2b6fb8",
   /** Selection ring for the note currently open in slide-edit mode — a hue nothing else on
    *  the canvas uses, and drawn much thicker than the plain selection ring (see
    *  ACTIVE_SLIDE_RING_WIDTH) so the two states read as clearly different at a glance. */
@@ -633,10 +635,15 @@ export class Renderer {
         roundRect(ctx, Math.min(head.x, tail.x), head.y - bw / 2, Math.abs(tail.x - head.x), bw, bw / 2);
       }
       ctx.fill();
-      circle(ctx, tail.x, tail.y, r * 0.72, COLORS.hold, COLORS.holdRim, ring, ringWidth);
+      // A flick-ended hold's tail is colored like a flick note, so its release reads
+      // differently from a normal one at a glance without needing a whole new shape.
+      const [tailFill, tailRim] = n.flickEnd ? [COLORS.flick, COLORS.flickRim] : [COLORS.hold, COLORS.holdRim];
+      circle(ctx, tail.x, tail.y, r * 0.72, tailFill, tailRim, ring, ringWidth);
       circle(ctx, head.x, head.y, r, COLORS.hold, COLORS.holdRim, ring, ringWidth);
     } else if (n.kind === "star") {
       star(ctx, head.x, head.y, r * 1.15, COLORS.star, COLORS.starRim, ring, ringWidth);
+    } else if (n.kind === "flick") {
+      chevron(ctx, head.x, head.y, r, o, COLORS.flick, COLORS.flickRim, ring, ringWidth);
     } else if (n.kind === "slide") {
       if (n.dur > 0) {
         const tail = this.notePoint(n.t + n.dur, n.lane, s);
@@ -651,7 +658,13 @@ export class Renderer {
         ctx.fill();
         circle(ctx, tail.x, tail.y, r * 0.72, COLORS.slide, COLORS.slideRim, ring, ringWidth);
       }
-      diamond(ctx, head.x, head.y, r, COLORS.slide, COLORS.slideRim, ring, ringWidth);
+      // A flick-ended chain's last point is drawn as a chevron instead of the usual
+      // diamond, same shape a standalone flick uses, so the ending reads at a glance.
+      if (n.flickEnd) {
+        chevron(ctx, head.x, head.y, r, o, COLORS.flick, COLORS.flickRim, ring, ringWidth);
+      } else {
+        diamond(ctx, head.x, head.y, r, COLORS.slide, COLORS.slideRim, ring, ringWidth);
+      }
     } else {
       circle(ctx, head.x, head.y, r, COLORS.tap, COLORS.tapRim, ring, ringWidth);
     }
@@ -777,6 +790,39 @@ function diamond(
   ctx.fillStyle = fill;
   ctx.fill();
   ctx.lineWidth = 2;
+  ctx.strokeStyle = rim;
+  ctx.stroke();
+  if (ring) selectRing(ctx, x, y, r, ring, ringWidth);
+}
+
+/** A flick's glyph: a chevron pointing along the time axis, distinct from every other
+ *  note shape so a flick — standalone, or a hold/slide ending in one — reads at a glance. */
+function chevron(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  o: Orientation,
+  fill: string,
+  rim: string,
+  ring: string | null,
+  ringWidth: number,
+): void {
+  const d = r * 1.2;
+  ctx.beginPath();
+  if (o === "vertical") {
+    ctx.moveTo(x - d, y - d * 0.8);
+    ctx.lineTo(x + d * 0.7, y);
+    ctx.lineTo(x - d, y + d * 0.8);
+  } else {
+    ctx.moveTo(x - d * 0.8, y - d);
+    ctx.lineTo(x, y + d * 0.7);
+    ctx.lineTo(x + d * 0.8, y - d);
+  }
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = 1.5;
   ctx.strokeStyle = rim;
   ctx.stroke();
   if (ring) selectRing(ctx, x, y, r, ring, ringWidth);

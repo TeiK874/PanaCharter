@@ -130,7 +130,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   let previewHoverLane: number | null = null;
   // Offsets from the earliest copied note and hold lengths are kept in BEATS (via the tempo
   // map), not seconds, so a phrase copied at one tempo pastes with the same rhythm at another.
-  let clipboard: { dBeat: number; lane: number; kind: NoteKind; durBeat: number; slideId?: number }[] = [];
+  let clipboard: { dBeat: number; lane: number; kind: NoteKind; durBeat: number; slideId?: number; flickEnd?: boolean }[] = [];
   // Slide chain currently being extended by sequential clicks of the slide tool. Its tail
   // note is looked up by id on every read (openSlideTail) rather than cached, so a tail
   // deleted or moved by any path can't leave a phantom origin behind.
@@ -554,6 +554,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       toolBtn("hold", "▮", "Hold — drag to set length", "3"),
       toolBtn("star", "★", "Star", "4"),
       toolBtn("slide", "◆", "Slide — click points across lanes, Esc ends the chain", "5"),
+      toolBtn("flick", "↗", "Flick — click a selected hold or a selected slide's tail to toggle its release into a flick", "6"),
     ),
     el(
       "div",
@@ -829,7 +830,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     issuesSpan.className = `issues ${errors ? "bad" : ""}`;
 
     const notes = doc().notes;
-    const byKind = { tap: 0, hold: 0, star: 0, slide: 0 };
+    const byKind = { tap: 0, hold: 0, star: 0, slide: 0, flick: 0 };
     for (const n of notes) byKind[n.kind]++;
     const pct = (n: number) => (notes.length > 0 ? Math.round((n / notes.length) * 100) : 0);
     comboSpan.textContent =
@@ -837,7 +838,8 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       `(T${byKind.tap} ${pct(byKind.tap)}% ` +
       `H${byKind.hold} ${pct(byKind.hold)}% ` +
       `St${byKind.star} ${pct(byKind.star)}% ` +
-      `Sl${byKind.slide} ${pct(byKind.slide)}%)`;
+      `Sl${byKind.slide} ${pct(byKind.slide)}% ` +
+      `Fl${byKind.flick} ${pct(byKind.flick)}%)`;
 
     if (notes.length > 0) {
       const times = notes.map((n) => n.t).sort((a, b) => a - b);
@@ -876,11 +878,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
   function showHelp(): void {
     const rows: [string, string][] = [
-      ["1–5", "Select / Tap / Hold / Star / Slide tool"],
+      ["1–6", "Select / Tap / Hold / Star / Slide / Flick tool"],
       ["Click", "Place note (drag for hold length)"],
       ["Slide: click, click, …", "Chain points across lanes · drag the last point for a hold end"],
       ["Esc (Slide tool)", "End the current slide chain"],
       ["Drag note", "Move · drag a hold's tail to resize"],
+      ["Click selected hold (tool ≠ Slide)", "Toggle its release between normal and flick"],
+      ["Click selected slide's tail (tool ≠ Slide)", "Toggle the chain's ending between normal/hold and flick"],
       ["Right-click", "Delete note"],
       ["Shift+click", "Add to selection"],
       ["Del", "Delete selection"],
@@ -1399,9 +1403,17 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
 
       // A plain click (no drag) on an already-selected tap/star note flips it — and every
       // other selected tap/star note along with it — to the other kind. A quick way to
-      // swap types without deleting and re-placing.
+      // swap types without deleting and re-placing. The same click on a selected hold
+      // toggles its release between normal and flick; on a selected slide chain's tail
+      // (only while some OTHER tool is active — the Slide tool's own plain click on an
+      // eligible tail already means "reopen this chain for editing", handled below via
+      // slideTogglePending) it toggles the chain's ending the same way.
       const kindTogglePending =
-        (hit.note.kind === "tap" || hit.note.kind === "star") && d.selection.has(hit.note.id);
+        d.selection.has(hit.note.id) &&
+        (hit.note.kind === "tap" ||
+          hit.note.kind === "star" ||
+          hit.note.kind === "hold" ||
+          (hit.note.kind === "slide" && tool !== "slide" && d.isSlideChainTail(hit.note)));
 
       // Clicking a slide chain tail that's already open for editing lets you drag it
       // into a hold, or click again (no drag) to close it. Once it becomes a hold it
@@ -1518,6 +1530,9 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       case "place-slide": {
         if (info) {
           gesture.note.dur = Math.max(0, round6(snapTime(info.t)) - round6(gesture.note.t));
+          // Dragging into a hold and ending in a flick are mutually exclusive —
+          // a real drag here always means "this chain ends in a hold".
+          gesture.note.flickEnd = false;
         }
         requestDraw();
         return;
@@ -1640,10 +1655,17 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       case "move": {
         if (!gesture.resizeNote) d.resolveCollisions(new Set(gesture.orig.keys()));
         if (gesture.kindTogglePending && !gesture.moved) {
-          // a plain click, no drag — flip every selected tap/star note instead of no-op'ing
+          // a plain click, no drag — flip every selected tap/star note, hold release, or
+          // slide chain ending instead of no-op'ing
           for (const id of gesture.orig.keys()) {
             const n = d.byId(id);
-            if (n && (n.kind === "tap" || n.kind === "star")) n.kind = n.kind === "tap" ? "star" : "tap";
+            if (!n) continue;
+            if (n.kind === "tap" || n.kind === "star") n.kind = n.kind === "tap" ? "star" : "tap";
+            else if (n.kind === "hold") n.flickEnd = !n.flickEnd;
+            else if (n.kind === "slide" && d.isSlideChainTail(n)) {
+              n.flickEnd = !n.flickEnd;
+              if (n.flickEnd) n.dur = 0; // a flick ending carries no hold duration
+            }
           }
         }
         d.commit(gesture.pre);
@@ -1783,6 +1805,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         kind: n.kind,
         durBeat: n.dur > 0 ? tm.beatAt(n.t + n.dur) - tm.beatAt(n.t) : 0,
         slideId: n.slideId,
+        flickEnd: n.flickEnd,
       }));
       if (e.key.toLowerCase() === "x") {
         endActiveSlide();
@@ -1832,6 +1855,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
             }
           }
           const n = d.place(t, lane, c.kind, dur, slideId);
+          if (c.flickEnd) n.flickEnd = true;
           d.selection.add(n.id);
         }
       });
@@ -1852,6 +1876,9 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         break;
       case "5":
         setTool("slide");
+        break;
+      case "6":
+        setTool("flick");
         break;
       case "Delete":
       case "Backspace":

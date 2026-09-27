@@ -49,6 +49,8 @@ const COLORS = {
   slide: "#b48cff",
   slideRim: "#7c56c9",
   slideBody: "rgba(180, 140, 255, 0.35)",
+  flick: "#4ea8ff",
+  flickRim: "#2b6fb8",
   label: "#77748f",
   labelStrong: "#eceaf4",
   density: "#62b1ff",
@@ -65,6 +67,8 @@ function colorFor(kind: NoteKind): readonly [string, string, string] {
       return [COLORS.star, COLORS.starRim, COLORS.starRim] as const;
     case "slide":
       return [COLORS.slide, COLORS.slideRim, COLORS.slideBody] as const;
+    case "flick":
+      return [COLORS.flick, COLORS.flickRim, COLORS.flickRim] as const;
     default:
       return [COLORS.tap, COLORS.tapRim, COLORS.tapRim] as const;
   }
@@ -81,11 +85,12 @@ interface LaneCounts {
   hold: number;
   star: number;
   slide: number;
+  flick: number;
 }
 
 /** Note counts per lane (index 0 = lane 1), broken down by kind. */
 function laneCounts(notes: Note[]): LaneCounts[] {
-  const counts: LaneCounts[] = Array.from({ length: LANES }, () => ({ tap: 0, hold: 0, star: 0, slide: 0 }));
+  const counts: LaneCounts[] = Array.from({ length: LANES }, () => ({ tap: 0, hold: 0, star: 0, slide: 0, flick: 0 }));
   for (const n of notes) {
     const c = counts[n.lane - 1];
     if (c) c[n.kind]++;
@@ -277,6 +282,12 @@ export class NotePreviewRenderer {
       const headPos = this.lerp(spawn, judge, headProgress);
       const headRadius = judgeRadius * noteScale(headProgress);
       const [fill, rim, body] = colorFor(n.kind);
+      // flickEnd marks the RELEASE as a flick — a hold's head (dur > 0) stays hold-colored
+      // and only its tail marker below turns flick-blue; a flick-ended slide chain has no
+      // duration of its own, so its tail IS this note's head circle and that's what has to
+      // turn flick-blue instead.
+      const [tailFill, tailRim] = n.flickEnd ? [COLORS.flick, COLORS.flickRim] : [fill, rim];
+      const [headFill, headRim] = n.dur === 0 && n.flickEnd ? [COLORS.flick, COLORS.flickRim] : [fill, rim];
 
       if (n.dur > 0) {
         const tailUntil = n.t + n.dur - s.now;
@@ -304,19 +315,19 @@ export class NotePreviewRenderer {
         // Tail marker (the release point).
         ctx.beginPath();
         ctx.arc(tailPos.x, tailPos.y, tailRadius, 0, Math.PI * 2);
-        ctx.fillStyle = fill;
+        ctx.fillStyle = tailFill;
         ctx.fill();
         ctx.lineWidth = Math.max(1, tailRadius * 0.18);
-        ctx.strokeStyle = rim;
+        ctx.strokeStyle = tailRim;
         ctx.stroke();
       }
 
       ctx.beginPath();
       ctx.arc(headPos.x, headPos.y, headRadius, 0, Math.PI * 2);
-      ctx.fillStyle = fill;
+      ctx.fillStyle = headFill;
       ctx.fill();
       ctx.lineWidth = Math.max(1, headRadius * 0.18);
-      ctx.strokeStyle = rim;
+      ctx.strokeStyle = headRim;
       ctx.stroke();
 
       // Slide direction arrow, overlaid on top of the note's circle.
@@ -407,10 +418,10 @@ export class NotePreviewRenderer {
     if (barBottom - barTop < 8) return; // panel too short — skip rather than overlap
 
     const counts = laneCounts(notes);
-    const totals = counts.map((c) => c.tap + c.hold + c.star + c.slide);
+    const totals = counts.map((c) => c.tap + c.hold + c.star + c.slide + c.flick);
     const maxTotal = Math.max(1, ...totals);
     const barAreaH = barBottom - barTop;
-    const kinds: (keyof LaneCounts)[] = ["tap", "hold", "star", "slide"];
+    const kinds: (keyof LaneCounts)[] = ["tap", "hold", "star", "slide", "flick"];
 
     ctx.font = "9px ui-monospace, monospace";
     ctx.textAlign = "center";
@@ -457,7 +468,7 @@ export class NotePreviewRenderer {
   private drawLaneTooltip(notes: Note[], lane: number, laneTop: number): void {
     const counts = laneCounts(notes)[lane - 1];
     if (!counts) return;
-    const total = counts.tap + counts.hold + counts.star + counts.slide;
+    const total = counts.tap + counts.hold + counts.star + counts.slide + counts.flick;
     const grandTotal = notes.length;
     const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0);
 
@@ -466,6 +477,7 @@ export class NotePreviewRenderer {
       { key: "hold", label: "Hold" },
       { key: "star", label: "Star" },
       { key: "slide", label: "Slide" },
+      { key: "flick", label: "Flick" },
     ];
     const lines = [`Lane ${lane}: ${total} (${pct(total, grandTotal)}%)`];
     for (const { key, label } of kinds) {
