@@ -220,6 +220,44 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     return gridStepSec(tempo().bpmAt(t), snap);
   }
 
+  /** Snaps every note in the current difficulty onto the tempo grid, for charts that predate
+   *  the slot-grid rework or were edited by a different build/tool: a note (or hold/slide
+   *  duration) that's merely within float noise of a grid line — not one deliberately placed
+   *  off-grid, which this leaves alone — gets pulled exactly onto it, the same self-heal the
+   *  move gesture already does for a note you actually drag, just applied to everything at
+   *  once without requiring a drag. Two notes meant to land "at the same" instant then
+   *  serialize as bit-identical times again, which is what the server's exact-equality chord
+   *  grouping needs. */
+  function snapAllToGrid(): void {
+    if (bpm() <= 0) {
+      toast("No BPM set — nothing to snap to", "error");
+      return;
+    }
+    const d = doc();
+    const tm = tempo();
+    const pre = d.begin();
+    let changed = 0;
+    for (const n of d.notes) {
+      const beforeT = n.t;
+      const beforeDur = n.dur;
+      const snappedT = snapWith(tm, n.t);
+      if (Math.abs(snappedT - n.t) < 1e-4) n.t = snappedT;
+      if (n.kind === "hold" || (n.kind === "slide" && n.dur > 0)) {
+        const origEnd = beforeT + beforeDur;
+        const snappedEnd = snapWith(tm, origEnd);
+        if (Math.abs(snappedEnd - origEnd) < 1e-4) {
+          n.dur = Math.max(0, round6(snappedEnd) - round6(n.t));
+        }
+      }
+      if (n.t !== beforeT || n.dur !== beforeDur) changed++;
+    }
+    d.commit(pre);
+    toast(
+      changed ? `Snapped ${changed} note${changed > 1 ? "s" : ""} onto the grid` : "Already on the grid",
+      changed ? "ok" : "info",
+    );
+  }
+
   function syncTicks(): void {
     const times: number[] = [];
     for (const n of doc().notes) {
@@ -570,6 +608,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         text: "Tempo…",
         title: "Add or edit mid-song tempo and time-signature changes",
         onclick: () => openTempoDialog(),
+      }),
+      el("button", {
+        class: "btn",
+        text: "Snap to grid",
+        title:
+          "Pull every note (and hold/slide length) that's merely within float noise of a grid line exactly onto it — fixes charts from before the grid-precision fixes, or edited by another tool, where simultaneous notes drifted apart by a hair",
+        onclick: () => snapAllToGrid(),
       }),
     ),
     el(

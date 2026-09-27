@@ -563,16 +563,27 @@ export class Renderer {
     const { ctx } = this;
     const t0 = s.scroll - 1;
     const t1 = s.scroll + this.timeSpan(s) + 1;
-    const groups = new Map<number, Note[]>();
-    for (const n of s.notes) {
-      if (n.t < t0 || n.t > t1) continue;
-      const g = groups.get(n.t);
-      if (g) g.push(n);
-      else groups.set(n.t, [n]);
+    // Two notes are simultaneous to within this — matching ew's own SIMULTANEOUS_EPSILON_SEC
+    // (chart.rs), which is what actually decides it once the chart is uploaded. Grouping by
+    // exact equality here would show two notes as NOT simultaneous whenever their raw values
+    // had drifted a few float ulps apart (different computation paths for "the same" instant
+    // — e.g. a hold's computed tail vs. an independently-placed tap), then flip to
+    // simultaneous as soon as the project is saved and reloaded, since round6 collapses that
+    // drift into identical decimal literals on the way out. Same intent, same eventual
+    // upload result — it shouldn't look different depending on whether you've saved yet.
+    const SIM_EPS = 1e-6;
+    const visible = s.notes.filter((n) => n.t >= t0 && n.t <= t1).sort((a, b) => a.t - b.t);
+    const groups: Note[][] = [];
+    for (const n of visible) {
+      const last = groups[groups.length - 1];
+      // Anchored to the group's FIRST member (same anchor ew's own clustering uses), not
+      // the previous note, so a long near-drifting run can't chain past the epsilon.
+      if (last && n.t - last[0].t <= SIM_EPS) last.push(n);
+      else groups.push([n]);
     }
     ctx.strokeStyle = COLORS.sim;
     ctx.lineWidth = 2;
-    for (const group of groups.values()) {
+    for (const group of groups) {
       if (group.length < 2) continue;
       const pts = group.map((n) => this.notePoint(n.t, n.lane, s));
       ctx.beginPath();
