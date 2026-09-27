@@ -1568,6 +1568,22 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
               const onGrid = Math.abs(snapWith(tm, o.t) - o.t) < 1e-4;
               n.t = onGrid ? Math.max(0, there) : round6(Math.max(0, o.t + (there - here)));
             }
+            if (hasGrid && kd !== 0 && (n.kind === "hold" || (n.kind === "slide" && n.dur > 0))) {
+              // A hold/slide-tail's length is otherwise carried through a move completely
+              // unchanged — only its start shifts. If the END was already on the grid, keep
+              // it on the SAME relative slot after the move too (same idea as the position
+              // self-heal above), so two notes of "the same" length that get moved to share
+              // a start also end up with bit-identical ends, instead of each still dragging
+              // along whatever (possibly one-tick-off) duration it happened to have before.
+              // Skipped when kd === 0 for the same reason position skips it: re-deriving an
+              // unmoved note through the grid math can land an ulp off and read as a real edit.
+              const origEnd = o.t + n.dur;
+              const onGridEnd = Math.abs(snapWith(tm, origEnd) - origEnd) < 1e-4;
+              if (onGridEnd) {
+                const endSlot = tm.slotAt(origEnd, snap) + kd;
+                n.dur = Math.max(0, round6(tm.slotTime(endSlot, snap)) - round6(n.t));
+              }
+            }
             n.lane = o.lane + dl;
             // Tracks a REAL displacement at any point during the drag, not just a net
             // change by release time — dragging away and back to the exact start should
