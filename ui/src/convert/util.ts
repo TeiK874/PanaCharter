@@ -5,20 +5,24 @@
 
 import type { SifNote } from "../types.js";
 
-/** Clamp/validate a converted note; returns null if unusable. */
+/** Clamp/validate a converted note; returns null if unusable. `flickEnd` only matters for
+ *  kind "hold" — it picks effect 10 (hold ending in a flick) over the plain effect 3, and,
+ *  if the hold turns out to have no duration, downgrades to a standalone flick (effect 8)
+ *  instead of a plain tap so the flick isn't lost. */
 export function makeNote(
   timing_sec: number,
   position: number,
-  kind: "tap" | "hold" | "star",
+  kind: "tap" | "hold" | "star" | "flick",
   dur = 0,
+  flickEnd = false,
 ): SifNote | null {
   if (!Number.isFinite(timing_sec) || timing_sec < 0) return null;
   if (!Number.isFinite(position) || position < 1 || position > 9) return null;
-  if (kind === "hold" && !(dur > 0)) kind = "tap";
+  if (kind === "hold" && !(dur > 0)) kind = flickEnd ? "flick" : "tap";
   return {
     timing_sec,
     position: Math.round(position),
-    effect: kind === "hold" ? 3 : kind === "star" ? 4 : 1,
+    effect: kind === "hold" ? (flickEnd ? 10 : 3) : kind === "star" ? 4 : kind === "flick" ? 8 : 1,
     effect_value: kind === "hold" ? dur : 0,
   };
 }
@@ -47,11 +51,11 @@ export function dropTailStacks(notes: SifNote[]): number {
   const EPS = 1e-9;
   const doomed = new Set<number>();
   for (const hold of notes) {
-    if (hold.effect !== 3) continue;
+    if (hold.effect !== 3 && hold.effect !== 10) continue;
     const end = hold.timing_sec + hold.effect_value;
     for (let i = 0; i < notes.length; i++) {
       const n = notes[i];
-      if (n === hold || n.position !== hold.position || n.effect === 3) continue;
+      if (n === hold || n.position !== hold.position || n.effect === 3 || n.effect === 10) continue;
       if (Math.abs(n.timing_sec - end) < EPS) doomed.add(i);
     }
   }

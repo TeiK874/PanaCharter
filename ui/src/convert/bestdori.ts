@@ -2,9 +2,10 @@
 // event list. Timing is in beats (BPM-change events interleaved); lanes 0–6
 // left-to-right map onto the center 7 of SIF2's 9 lanes.
 //
-// Lossy by nature: SIF2 holds can't change lanes, and has no flicks — slides
-// flatten to a hold on their starting lane, flicks become taps. Every loss is
-// counted and reported as an import warning.
+// Lossy by nature: SIF2 holds can't change lanes, so slides flatten to a hold
+// on their starting lane (flicks survive, either as standalone flick notes or
+// as a hold that ends in one). Every loss is counted and reported as an
+// import warning.
 
 import type { ChartConverter, ImportedChart } from "./index.js";
 import { dropTailStacks, makeBeatClock, makeNote } from "./util.js";
@@ -73,7 +74,7 @@ export const bestdoriConverter: ChartConverter = {
             break;
           }
           if (e.flick) flicks++;
-          const n = makeNote(toSec(e.beat), lanePos(e.lane), "tap");
+          const n = makeNote(toSec(e.beat), lanePos(e.lane), e.flick ? "flick" : "tap");
           if (n) notes.push(n);
           else skipped++;
           break;
@@ -84,7 +85,7 @@ export const bestdoriConverter: ChartConverter = {
             break;
           }
           flicks++;
-          const n = makeNote(toSec(e.beat), lanePos(e.lane), "tap");
+          const n = makeNote(toSec(e.beat), lanePos(e.lane), "flick");
           if (n) notes.push(n);
           else skipped++;
           break;
@@ -105,7 +106,7 @@ export const bestdoriConverter: ChartConverter = {
           if (tail.flick) flicks++;
           const t0 = toSec(head.beat);
           const dur = toSec(tail.beat) - t0;
-          const n = makeNote(t0, lanePos(head.lane), "hold", dur);
+          const n = makeNote(t0, lanePos(head.lane), "hold", dur, tail.flick === true);
           if (n) notes.push(n);
           else skipped++;
           break;
@@ -125,7 +126,7 @@ export const bestdoriConverter: ChartConverter = {
         `${laneChangingSlides} slides change lanes — flattened to a straight hold on their starting lane.`,
       );
     if (slideTicks) warnings.push(`${slideTicks} mid-slide waypoints were dropped.`);
-    if (flicks) warnings.push(`${flicks} flick notes became plain taps/hold-ends — SIF2 has no flicks.`);
+    if (flicks) warnings.push(`${flicks} flick note${flicks > 1 ? "s" : ""} imported.`);
     if (skipped) warnings.push(`${skipped} events were unrecognized or invalid and were skipped.`);
 
     const bpmEvents = events

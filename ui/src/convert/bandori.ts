@@ -3,8 +3,9 @@
 // frozen, in-game-verified converter (bandori_to_sif2.py):
 //
 // - A slot's meaning comes from the chart's own #WAVxx keysound table:
-//   bd/skill/fever_note → tap, flick* → tap (SIF2 has no flick gesture),
-//   slide_a/b (+ends) → slide chains, bgm/cmd_/se_ → skipped.
+//   bd/skill/fever_note → tap, flick* → flick, slide_a/b (+ends) → slide
+//   chains (a chain ending in *_flick becomes a hold that ends in a flick),
+//   bgm/cmd_/se_ → skipped.
 // - Channels 11–16,18 are the 7 lanes; BMS quirk: channel 16 is the LEFTMOST
 //   display lane. Channels 51–56,58 are the LNTYPE-1 hold layer (paired
 //   open/close markers per lane). Channel 02 = measure length, 03 = hex BPM.
@@ -169,7 +170,7 @@ export const bandoriNoteConverter: ChartConverter = {
     for (const e of events) {
       if (e.action === "tap" || e.action === "flick") {
         if (e.action === "flick") flicks++;
-        const n = makeNote(e.t, LANE_POS[e.lane], "tap");
+        const n = makeNote(e.t, LANE_POS[e.lane], e.action === "flick" ? "flick" : "tap");
         if (n) notes.push(n);
         else skipped++;
       }
@@ -181,10 +182,12 @@ export const bandoriNoteConverter: ChartConverter = {
       .sort((a, b) => a.t - b.t || a.lane - b.lane);
     const open = new Map<string, Ev[]>();
     const chains: Ev[][] = [];
+    // Matched by suffix (ignoring the extension), not a fixed substring list — a plain
+    // "_end_a" and a flick-ending "_end_flick_a" must resolve to the same stream "a" so a
+    // slide_end_flick tail still joins the chain its slide_a head opened.
     const streamOf = (e: Ev) => {
-      const n = e.wav.toLowerCase();
-      return n.includes("slide_a") || n.includes("slide_end_a") ? "a"
-        : n.includes("slide_b") || n.includes("slide_end_b") ? "b" : "x";
+      const n = e.wav.toLowerCase().replace(/\.[^.]*$/, "");
+      return n.endsWith("_a") ? "a" : n.endsWith("_b") ? "b" : "x";
     };
     for (const e of slideEvents) {
       const k = streamOf(e);
@@ -204,8 +207,10 @@ export const bandoriNoteConverter: ChartConverter = {
 
     for (const chain of chains) {
       if (chain.length < 2) {
-        // isolated slide sound = tap-with-slide-skin
-        const n = makeNote(chain[0].t, LANE_POS[chain[0].lane], "tap");
+        // isolated slide sound = tap-with-slide-skin, or a flick if it was meant to end in one
+        const isFlick = chain[0].action === "slide_end_flick";
+        if (isFlick) flicks++;
+        const n = makeNote(chain[0].t, LANE_POS[chain[0].lane], isFlick ? "flick" : "tap");
         if (n) notes.push(n);
         else skipped++;
         continue;
@@ -213,8 +218,9 @@ export const bandoriNoteConverter: ChartConverter = {
       const head = chain[0];
       const tail = chain[chain.length - 1];
       if (chain.some((e) => e.lane !== head.lane)) zigzags++;
-      if (tail.action === "slide_end_flick") flicks++;
-      const n = makeNote(head.t, LANE_POS[head.lane], "hold", tail.t - head.t);
+      const isFlickEnd = tail.action === "slide_end_flick";
+      if (isFlickEnd) flicks++;
+      const n = makeNote(head.t, LANE_POS[head.lane], "hold", tail.t - head.t, isFlickEnd);
       if (n) notes.push(n);
       else skipped++;
     }
@@ -259,7 +265,7 @@ export const bandoriNoteConverter: ChartConverter = {
       );
     if (undefinedSlots)
       warnings.push(`${undefinedSlots} note slots referenced undefined #WAV entries and were skipped.`);
-    if (flicks) warnings.push(`${flicks} flicks became plain taps/hold-ends — SIF2 has no flick gesture.`);
+    if (flicks) warnings.push(`${flicks} flick${flicks > 1 ? "s" : ""} imported.`);
     if (zigzags) warnings.push(`${zigzags} lane-changing slides were flattened to a hold on their starting lane.`);
     if (midClicks) warnings.push(`${midClicks} mid-slide clicks were merged into their hold (the upload format only supports simple holds).`);
     if (orphans) warnings.push(`${orphans} lanes had an unpaired hold marker — the trailing marker was dropped.`);
