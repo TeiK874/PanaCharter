@@ -194,21 +194,42 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   };
   const duration = () => (player.loaded ? player.duration : fallbackDuration());
 
-  /** Nearest grid line to `t` under tempo map `tm` — the same segment-local lines render.ts
-   *  draws (see tempo.ts slotAt/slotTime). With no tempo changes this is bit for bit the
-   *  original `offset + round((t - offset) / step) * step`, which is what keeps notes from
-   *  older projects reading as on-grid (`snapTime(n.t) === n.t`). */
-  function snapWith(tm: TempoMap, t: number): number {
+  /** Nearest grid line to `t` under tempo map `tm`, on division `div` (defaults to the
+   *  currently-selected snap) — the same segment-local lines render.ts draws (see tempo.ts
+   *  slotAt/slotTime). With no tempo changes this is bit for bit the original `offset +
+   *  round((t - offset) / step) * step`, which is what keeps notes from older projects
+   *  reading as on-grid (`snapTime(n.t) === n.t`). */
+  function snapWith(tm: TempoMap, t: number, div: number = snap): number {
     // slotTime is a pure function of an integer slot number, so two notes landing on the
     // same slot come out bit-identical without needing to round — no float noise to chase.
     const clamped = Math.max(0, t);
-    return Math.max(0, tm.slotTime(tm.slotAt(clamped, snap), snap));
+    return Math.max(0, tm.slotTime(tm.slotAt(clamped, div), div));
+  }
+
+  /** The grid line — on ANY standard division, not just the currently-selected snap — that
+   *  `t` is closest to, if that's within float noise of it; null if `t` isn't close to any
+   *  of them. Different divisions' lines are generically tens of milliseconds apart at any
+   *  real-world BPM, four orders of magnitude above the tolerance here, so at most one
+   *  division can plausibly match for a given drifted note — there's no need to know which
+   *  division a note was originally placed on to recognize it's merely drifted off that
+   *  line. */
+  function nearestGridTime(tm: TempoMap, t: number): number | null {
+    let best: number | null = null;
+    let bestDiff = 1e-4;
+    for (const div of SNAPS) {
+      const candidate = snapWith(tm, t, div);
+      const diff = Math.abs(candidate - t);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = candidate;
+      }
+    }
+    return best;
   }
 
   function snapTime(t: number): number {
-    // No tempo at all means no slot grid to land on — round6 is the only thing keeping
-    // two notes placed "at the same" raw time bit-identical here.
-    if (bpm() <= 0) return round6(Math.max(0, t));
+    // No tempo at all means no slot grid to land on.
+    if (bpm() <= 0) return Math.max(0, t);
     return snapWith(tempo(), t);
   }
 
@@ -225,9 +246,12 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
    *  duration) that's merely within float noise of a grid line — not one deliberately placed
    *  off-grid, which this leaves alone — gets pulled exactly onto it, the same self-heal the
    *  move gesture already does for a note you actually drag, just applied to everything at
-   *  once without requiring a drag. Two notes meant to land "at the same" instant then
-   *  serialize as bit-identical times again, which is what the server's exact-equality chord
-   *  grouping needs. */
+   *  once without requiring a drag. Checks every standard division (nearestGridTime), not
+   *  just the currently-selected snap — a chart can mix plain notes with triplets, and
+   *  there's no single division that's a superset of both (SNAPS' binary and 3-multiple
+   *  entries only share 1, 2, 4, 6, 12 aren't multiples of 16 or vice versa), so picking one
+   *  division would silently miss the other family instead of just doing the right thing
+   *  automatically. */
   function snapAllToGrid(): void {
     if (bpm() <= 0) {
       toast("No BPM set — nothing to snap to", "error");
@@ -240,16 +264,24 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     for (const n of d.notes) {
       const beforeT = n.t;
       const beforeDur = n.dur;
-      const snappedT = snapWith(tm, n.t);
-      if (Math.abs(snappedT - n.t) < 1e-4) n.t = snappedT;
+      const snappedT = nearestGridTime(tm, beforeT);
+      const newT = snappedT !== null ? snappedT : beforeT;
+      let newDur = beforeDur;
       if (n.kind === "hold" || (n.kind === "slide" && n.dur > 0)) {
         const origEnd = beforeT + beforeDur;
-        const snappedEnd = snapWith(tm, origEnd);
-        if (Math.abs(snappedEnd - origEnd) < 1e-4) {
-          n.dur = Math.max(0, round6(snappedEnd) - round6(n.t));
-        }
+        const snappedEnd = nearestGridTime(tm, origEnd);
+        if (snappedEnd !== null) newDur = Math.max(0, snappedEnd - newT);
       }
-      if (n.t !== beforeT || n.dur !== beforeDur) changed++;
+      // Compare at round6 (export) precision, not raw bits: toSif() rounds on the way
+      // out, so a note reloaded from a save is already round6(preciseValue) — a few
+      // ulps off the freshly-recomputed precise value even when it's already correct.
+      // Comparing raw would flag (and rewrite) it as "changed" every single time this
+      // runs after a reload, forever, for a difference that was never real.
+      if (round6(newT) !== round6(beforeT) || round6(newDur) !== round6(beforeDur)) {
+        n.t = newT;
+        n.dur = newDur;
+        changed++;
+      }
     }
     d.commit(pre);
     toast(
@@ -272,6 +304,9 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   let saveTimer: number | null = null;
   let saveState: "saved" | "dirty" | "saving" = "saved";
   let saveGen = 0;
+  // Serializes actual project_save calls — see doSave()'s doc comment for why.
+  let saveInFlight: Promise<boolean> | null = null;
+  let saveQueued = false;
 
   function chartsRecord(): Record<string, SifNote[]> {
     const out: Record<string, SifNote[]> = {};
@@ -292,11 +327,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       .sort((a, b) => a.level - b.level);
   }
 
-  async function doSave(): Promise<boolean> {
-    if (saveTimer !== null) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
+  async function saveOnce(): Promise<boolean> {
     const gen = ++saveGen;
     syncManifestLevels();
     editorMeta.snap = snap;
@@ -308,7 +339,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     try {
       await api.projectSave(data.id, manifest, editorMeta, chartsRecord());
       // edits made while the save was in flight keep the doc dirty
-      if (gen === saveGen && saveTimer === null) saveState = "saved";
+      if (gen === saveGen && saveTimer === null && !saveQueued) saveState = "saved";
       else if (saveState === "saving") saveState = "dirty";
     } catch (e) {
       saveState = "dirty";
@@ -317,6 +348,40 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     }
     updateStatus();
     return ok;
+  }
+
+  /** Runs project_save calls one at a time — never two in flight together. A call that
+   *  arrives while one is already running doesn't start its own; it just marks a
+   *  follow-up pass to run immediately after, which captures whatever's dirty AT THAT
+   *  POINT rather than the stale snapshot from when it was requested. Without this, two
+   *  overlapping saves — e.g. the debounced autosave firing right as dispose() also
+   *  forces one on navigating away — could finish their IPC round trips out of order,
+   *  letting the now-stale earlier call's write land on disk AFTER the newer one and
+   *  silently erase the latest edit. (The two calls used to share one fixed temp
+   *  filename on the Rust side too, compounding this — see write_atomic in
+   *  projects.rs — so both ends needed the fix.) */
+  async function doSave(): Promise<boolean> {
+    if (saveTimer !== null) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    if (saveInFlight) {
+      saveQueued = true;
+      return saveInFlight;
+    }
+    saveInFlight = (async () => {
+      let result = await saveOnce();
+      while (saveQueued) {
+        saveQueued = false;
+        result = await saveOnce();
+      }
+      return result;
+    })();
+    try {
+      return await saveInFlight;
+    } finally {
+      saveInFlight = null;
+    }
   }
 
   function markDirty(): void {
@@ -613,7 +678,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         class: "btn",
         text: "Snap to grid",
         title:
-          "Pull every note (and hold/slide length) that's merely within float noise of a grid line exactly onto it — fixes charts from before the grid-precision fixes, or edited by another tool, where simultaneous notes drifted apart by a hair",
+          "Pull every note (and hold/slide length) that's merely within float noise of a grid line exactly onto it — checks every standard division (plain and triplet), not just the one currently selected — fixes charts from before the grid-precision fixes, or edited by another tool, where simultaneous notes drifted apart by a hair",
         onclick: () => snapAllToGrid(),
       }),
     ),
@@ -1561,20 +1626,14 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       }
       case "place-hold": {
         if (info) {
-          // Round both endpoints before subtracting, not after: gesture.note.t is already
-          // round6'd (from place()) but snapTime(info.t) isn't, and subtracting a rounded
-          // value from an unrounded one — then rounding the DIFFERENCE separately at export —
-          // can round the wrong way when the true length sits right on a tie. Rounding first
-          // makes t + dur reconstruct the exact same grid instant a plain note placed there
-          // would get, which is what the server's exact-equality chord grouping needs.
-          gesture.note.dur = Math.max(0, round6(snapTime(info.t)) - round6(gesture.note.t));
+          gesture.note.dur = Math.max(0, snapTime(info.t) - gesture.note.t);
         }
         requestDraw();
         return;
       }
       case "place-slide": {
         if (info) {
-          gesture.note.dur = Math.max(0, round6(snapTime(info.t)) - round6(gesture.note.t));
+          gesture.note.dur = Math.max(0, snapTime(info.t) - gesture.note.t);
           // Dragging into a hold and ending in a flick are mutually exclusive —
           // a real drag here always means "this chain ends in a hold".
           gesture.note.flickEnd = false;
@@ -1586,7 +1645,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         if (!info || info.kind !== "lanes") return;
         if (gesture.resizeNote) {
           const n = gesture.resizeNote;
-          n.dur = Math.max(localStepSec(n.t), round6(snapTime(info.t)) - round6(n.t));
+          n.dur = Math.max(localStepSec(n.t), snapTime(info.t) - n.t);
         } else {
           // Move by an INTEGER number of grid slots (tempo.ts) — counted on the same
           // segment-local grid that's drawn and snapped to, so a drag across a tempo change
@@ -1608,7 +1667,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
             const o = gesture.orig.get(n.id);
             if (!o) continue;
             if (!hasGrid) {
-              n.t = round6(Math.max(0, o.t + rawDt));
+              n.t = Math.max(0, o.t + rawDt);
             } else if (kd === 0) {
               // No net movement keeps the exact original value: re-deriving it through the
               // grid math can land an ulp off, which then reads as a real edit (a phantom
@@ -1623,10 +1682,9 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
               // this self-heals any tiny pre-existing drift (e.g. from an older chart, or
               // notes merged from elsewhere) onto the new grid position, instead of just
               // preserving it via the raw-distance shift. `there` is a pure function of an
-              // integer slot, so notes sharing one land bit-identical without rounding;
-              // the off-grid shift is real float arithmetic, so it still gets rounded.
+              // integer slot, so notes sharing one land bit-identical.
               const onGrid = Math.abs(snapWith(tm, o.t) - o.t) < 1e-4;
-              n.t = onGrid ? Math.max(0, there) : round6(Math.max(0, o.t + (there - here)));
+              n.t = onGrid ? Math.max(0, there) : Math.max(0, o.t + (there - here));
             }
             if (hasGrid && kd !== 0 && (n.kind === "hold" || (n.kind === "slide" && n.dur > 0))) {
               // A hold/slide-tail's length is otherwise carried through a move completely
@@ -1641,7 +1699,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
               const onGridEnd = Math.abs(snapWith(tm, origEnd) - origEnd) < 1e-4;
               if (onGridEnd) {
                 const endSlot = tm.slotAt(origEnd, snap) + kd;
-                n.dur = Math.max(0, round6(tm.slotTime(endSlot, snap)) - round6(n.t));
+                n.dur = Math.max(0, tm.slotTime(endSlot, snap) - n.t);
               }
             }
             n.lane = o.lane + dl;
@@ -1886,7 +1944,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
           } else {
             t = Math.max(0, raw);
           }
-          const dur = c.durBeat > 0 ? Math.max(0, round6(tm.timeAt(tm.beatAt(t) + c.durBeat)) - round6(t)) : 0;
+          const dur = c.durBeat > 0 ? Math.max(0, tm.timeAt(tm.beatAt(t) + c.durBeat) - t) : 0;
           let lane = c.lane;
           if(shift) {
             lane = 10 - lane;

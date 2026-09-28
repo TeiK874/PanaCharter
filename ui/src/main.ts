@@ -3,6 +3,7 @@ import { el, toast } from "./dom.js";
 import { createConnectView } from "./views/connect.js";
 import { createLibraryView } from "./views/library.js";
 import { createEditor } from "./editor/editor.js";
+import { getCurrentWindow } from "./tauri.js";
 
 const app = document.getElementById("app")!;
 
@@ -117,6 +118,27 @@ window.addEventListener("charter-auth-expired", () => {
   if (now - lastExpiryToast > 8000) {
     lastExpiryToast = now;
     toast("Your server session expired — log in again from the server panel (top right)", "error");
+  }
+});
+
+// --- flush pending edits before the OS window closes -----------------------------
+// The editor debounces autosave by ~1.2s (markDirty) and only flushes it early on
+// in-app navigation, via the outgoing view's dispose() (see mount() above). Closing
+// the WINDOW itself — the OS close button, Alt+F4, Cmd+Q — bypasses that entirely,
+// so an edit made just before closing (a bulk fix like "Snap to grid" being the most
+// noticeable case) could silently never reach disk. Intercept the close request,
+// flush the current view the same way navigating away would, then force the window
+// closed for real — a second request while already closing just goes through, since
+// close() would otherwise re-raise this same event and recurse.
+let closingForReal = false;
+void getCurrentWindow().onCloseRequested(async (event) => {
+  if (closingForReal) return;
+  event.preventDefault();
+  closingForReal = true;
+  try {
+    await currentDispose?.();
+  } finally {
+    await getCurrentWindow().destroy();
   }
 });
 

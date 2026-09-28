@@ -566,11 +566,10 @@ export class Renderer {
     // Two notes are simultaneous to within this — matching ew's own SIMULTANEOUS_EPSILON_SEC
     // (chart.rs), which is what actually decides it once the chart is uploaded. Grouping by
     // exact equality here would show two notes as NOT simultaneous whenever their raw values
-    // had drifted a few float ulps apart (different computation paths for "the same" instant
-    // — e.g. a hold's computed tail vs. an independently-placed tap), then flip to
-    // simultaneous as soon as the project is saved and reloaded, since round6 collapses that
-    // drift into identical decimal literals on the way out. Same intent, same eventual
-    // upload result — it shouldn't look different depending on whether you've saved yet.
+    // had drifted a few float ulps apart — different computation paths for "the same" instant
+    // (e.g. a hold's computed tail vs. an independently-placed tap) aren't guaranteed to be
+    // bit-identical, only within float noise (~1e-13) of each other — so matching the
+    // server's own tolerance here shows exactly what the upload will do.
     const SIM_EPS = 1e-6;
     const visible = s.notes.filter((n) => n.t >= t0 && n.t <= t1).sort((a, b) => a.t - b.t);
     const groups: Note[][] = [];

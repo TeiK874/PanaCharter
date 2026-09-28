@@ -4,8 +4,12 @@ export type NoteKind = "tap" | "hold" | "star" | "slide" | "flick";
 
 export interface Note {
   id: number;
-  /** Hit time, seconds. Snapped placements share bit-identical values, which is
-   *  what makes the server group them as simultaneous (exact f64 equality). */
+  /** Hit time, seconds. The server (ew's chart.rs) groups notes into one spawn cluster
+   *  when their times agree within SIMULTANEOUS_EPSILON_SEC (1e-6) — not exact equality —
+   *  and the slot grid (tempo.ts) already keeps snapped placements within float noise
+   *  (~1e-13) of each other, comfortably inside that tolerance without any rounding.
+   *  Kept at full precision in memory; toSif() rounds on the way out (see round6) for an
+   *  unrelated reason — a serde_json parsing bug on the Rust side. */
   t: number;
   /** Lane 1–9, right-to-left (1 = rightmost, matching the game). */
   lane: number;
@@ -41,10 +45,18 @@ export function allocateSlideId(): number {
 
 const EPS = 1e-9;
 
-/** Collapses float noise (drift from repeated snap/paste/tempo math, ~1e-13 scale) down
- *  to microsecond precision, so notes that are conceptually at the same time serialize
- *  as bit-identical timing_sec — which is what the server's exact-equality chord check
- *  relies on. */
+/** Rounds to microsecond precision — far coarser than anything this app's own math
+ *  needs (the slot grid already keeps intentionally-simultaneous notes within ~1e-13
+ *  of each other, and the server's own chord grouping tolerates 1e-6 anyway). This
+ *  exists for a completely different reason: the project file is written by a Rust
+ *  backend over Tauri's IPC, and serde_json 1.0.150's float parser has a confirmed bug
+ *  where a handful of full-precision (17-significant-digit) decimal strings parse back
+ *  as the ADJACENT f64 instead of the one they actually name (see the regression test
+ *  in src-tauri/src/projects.rs). A note round-tripped through such a case reads as
+ *  having drifted a couple of ULPs every time the project reopens — not a real edit,
+ *  but enough to make "Snap to grid" (or anything else comparing exact values) think
+ *  it needs fixing again on every load. Rounding here keeps the JSON text short enough
+ *  that it never reaches the digit count where that parser bug can trigger. */
 export function round6(t: number): number {
   return Math.round(t * 1e6) / 1e6;
 }
@@ -230,8 +242,6 @@ export class ChartDoc {
 
   /** Place a note; anything already on that exact time+lane is replaced. */
   place(t: number, lane: number, kind: NoteKind, dur = 0, slideId?: number): Note {
-    t = round6(t);
-    dur = round6(dur);
     const clash = this.noteAt(t, lane);
     if (clash) this.notes.splice(this.notes.indexOf(clash), 1);
     const note: Note = { id: nextId++, t, lane, kind, dur, slideId };

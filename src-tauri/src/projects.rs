@@ -273,9 +273,19 @@ fn remove_asset(dir: &Path, stem: &str) {
 /// Write via `<path>.tmp` + rename so a crash mid-write (autosave, import) can
 /// never leave a truncated file behind — an empty manifest.json makes
 /// `summarize` return None and the project vanish from the library.
+/// Per-process counter making every write_atomic temp path unique. Two overlapping
+/// saves of the same file (e.g. a debounced autosave and an explicit flush racing
+/// each other) used to share one fixed `.tmp` name: the second write would clobber the
+/// first's temp file's *contents*, and whichever finished its rename first would then
+/// hit a missing source file, since the other had already consumed it. A unique name
+/// per call keeps every write+rename independently atomic regardless of overlap — the
+/// rename that lands last simply wins, same as any other last-write-wins file save.
+static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let n = TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
+    tmp.push(format!(".{}.{n}.tmp", std::process::id()));
     let tmp = PathBuf::from(tmp);
     fs::write(&tmp, bytes).map_err(es)?;
     fs::rename(&tmp, path).map_err(es)
@@ -937,5 +947,21 @@ mod tests {
             notes_level: 0,
         };
         assert!(!serde_json::to_string(&note).unwrap().contains("notes_level"));
+    }
+
+    // Traced from a real field report: a chart's note kept getting flagged as
+    // off-grid every time the project was reopened, even though the editor sent the
+    // exact right value on every save. Root cause: serde_json 1.0.150 parses the
+    // decimal string "1.9242268041237114" back as the ADJACENT f64 (one ULP off,
+    // 1.9242268041237112) instead of the value that string actually names — a
+    // parser bug, not anything wrong on the editor's side. Full 17-significant-digit
+    // doubles are the only representations that can exercise this; round6ing at
+    // toSif() (see chart.ts) keeps the app from ever emitting one. This test just
+    // guards against a serde_json upgrade silently fixing (or moving) the bug from
+    // under us without anyone noticing this comment.
+    #[test]
+    fn serde_json_1_0_150_mis_parses_this_specific_decimal_string() {
+        let v: f64 = serde_json::from_str("1.9242268041237114").unwrap();
+        assert_eq!(v, 1.9242268041237112, "if this fails, serde_json's parser bug is fixed — the round6 workaround in chart.ts's toSif() may no longer be load-bearing");
     }
 }
