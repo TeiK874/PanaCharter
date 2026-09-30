@@ -3,6 +3,7 @@ import { attempt, confirmDialog, el, fmtTime, openDialog, pickFile, toast } from
 import type { ProjectData, SifNote } from "../types.js";
 import { DIFFICULTIES } from "../types.js";
 import { Player } from "./audio.js";
+import type { TickSound } from "./audio.js";
 import { ChartDoc, allocateSlideId, round6 } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
 import { buildTempoMap, buildTimeSigMap, gridStepSec } from "./tempo.js";
@@ -93,6 +94,39 @@ function loadPreviewSizeScale(): number {
   return 1;
 }
 
+// Playback sound settings (note ticks, tick sound, volume) — app-wide preferences, not
+// per-project state, so they live in localStorage like the preview settings above rather
+// than in editorMeta.
+const TICK_ENABLED_KEY = "charter.tickEnabled";
+const TICK_SOUND_KEY = "charter.tickSound";
+const VOLUME_KEY = "charter.volumePct";
+
+function loadTickEnabled(): boolean {
+  const raw = localStorage.getItem(TICK_ENABLED_KEY);
+  return raw === null ? true : raw === "1";
+}
+function loadTickSound(): TickSound {
+  return localStorage.getItem(TICK_SOUND_KEY) === "se" ? "se" : "beep";
+}
+function loadVolumePct(): number {
+  const stored = localStorage.getItem(VOLUME_KEY);
+  // Number(null) is 0, not NaN — without this check, "never saved before" was
+  // indistinguishable from "saved as 0" and silently opened every project muted.
+  if (stored === null) return 100;
+  const raw = Number(stored);
+  return Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : 100;
+}
+
+// Preview panel width, px — an app-wide layout preference like the sound settings above,
+// not per-project state. Null (never saved, or a stored value too small to be real) means
+// "use the CSS default" rather than forcing a specific width on a first-ever launch.
+const PREVIEW_WIDTH_KEY = "charter.previewWidthPx";
+
+function loadPreviewWidthPx(): number | null {
+  const raw = Number(localStorage.getItem(PREVIEW_WIDTH_KEY));
+  return Number.isFinite(raw) && raw >= 140 ? raw : null;
+}
+
 export async function createEditor(projectId: string, goBack: () => void): Promise<EditorView> {
   const data: ProjectData = await api.projectLoad(projectId);
   const manifest = data.manifest;
@@ -154,6 +188,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   }
 
   const player = new Player();
+  // Seed from the persisted app-wide preferences before init() — it resends whatever
+  // volume is currently set to the native mixer (and always preloads the tick SE sound
+  // on the web backend), so these need to already hold the saved values by then, not
+  // the class's own hardcoded defaults.
+  player.ticksEnabled = loadTickEnabled();
+  player.tickSound = loadTickSound();
+  player.volume = loadVolumePct() / 100;
   await player.init();
 
   const bpm = () => manifest.bpm ?? 120;
@@ -651,12 +692,13 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   rateSelect.value = "1";
 
   const tickBtn = el("button", {
-    class: "btn tool-btn active",
+    class: `btn tool-btn${player.ticksEnabled ? " active" : ""}`,
     text: "🔔",
     title: "Note ticks during playback",
     onclick: () => {
       player.setTicksEnabled(!player.ticksEnabled);
       tickBtn.classList.toggle("active", player.ticksEnabled);
+      localStorage.setItem(TICK_ENABLED_KEY, player.ticksEnabled ? "1" : "0");
     },
   });
 
@@ -667,7 +709,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         ? "Tick sound"
         : "Tick sound (the native audio engine can only play the synthesized beep)",
       disabled: !player.supportsTickSe,
-      onchange: () => player.setTickSound(tickSoundSelect.value === "se" ? "se" : "beep"),
+      onchange: () => {
+        const sound = tickSoundSelect.value === "se" ? "se" : "beep";
+        player.setTickSound(sound);
+        localStorage.setItem(TICK_SOUND_KEY, sound);
+      },
     },
     el("option", { value: "beep", text: "Beep" }),
     el("option", { value: "se", text: "Perfect SE" }),
@@ -678,9 +724,12 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     type: "range",
     min: "0",
     max: "100",
-    value: "100",
+    value: String(Math.round(player.volume * 100)),
     title: "Audio volume",
-    oninput: () => player.setVolume(Number(volumeInput.value) / 100),
+    oninput: () => {
+      player.setVolume(Number(volumeInput.value) / 100);
+      localStorage.setItem(VOLUME_KEY, volumeInput.value);
+    },
   });
 
   const orientBtn = el("button", {
@@ -750,6 +799,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
         onclick: () => snapAllToGrid(),
       }),
     ),
+    el("div", { class: "row-break" }),
     el(
       "div",
       { class: "group" },
@@ -951,14 +1001,17 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     e.preventDefault();
     const startX = e.clientX;
     const startWidth = previewPanel.getBoundingClientRect().width;
+    let finalWidth = startWidth;
     const onMove = (ev: PointerEvent) => {
       const bodyWidth = editorBody.getBoundingClientRect().width;
       const w = Math.min(bodyWidth * 0.7, Math.max(140, startWidth + (ev.clientX - startX)));
       previewPanel.style.width = `${w}px`;
+      finalWidth = w;
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      localStorage.setItem(PREVIEW_WIDTH_KEY, String(Math.round(finalWidth)));
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -2201,6 +2254,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   renderTabs();
   updateStatus();
   requestAnimationFrame(() => {
+    const savedPreviewWidth = loadPreviewWidthPx();
+    if (savedPreviewWidth !== null) {
+      const bodyWidth = editorBody.getBoundingClientRect().width;
+      previewPanel.style.width = `${Math.min(bodyWidth * 0.7, Math.max(140, savedPreviewWidth))}px`;
+    }
     renderer.resize();
     previewRenderer.resize();
     requestDraw();

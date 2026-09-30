@@ -267,6 +267,9 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
   border-right: 1px solid var(--line);
 }
 .editor-toolbar .group:last-child { border-right: none; }
+/* Forces everything after it onto a new toolbar row, regardless of window width —
+   unlike the incidental wrapping flex-wrap already does when a row runs out of space. */
+.editor-toolbar .row-break { flex-basis: 100%; height: 0; }
 .editor-toolbar input[type="number"] { width: 74px; padding: 4px 7px; }
 .editor-toolbar select { padding: 4px 7px; }
 .editor-toolbar .mini-label { font-size: 11px; color: var(--muted); }
