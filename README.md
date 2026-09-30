@@ -81,12 +81,13 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 
 | Input | Action |
 |---|---|
-| `1` / `2` / `3` / `4` / `5` | Select / Tap / Hold / Star / Slide tool |
+| `1`–`6` | Select / Tap / Hold / Star / Slide / Flick tool |
 | Click | Place note (drag to set a hold's length) |
 | Slide: click, click, … | Chain points across lanes · drag the last point to end it in a hold |
 | `Esc` (Slide tool) | End the current slide chain |
 | Drag note | Move it · drag a hold's **tail** to resize |
 | Click an already-selected tap/star note | Flip it — and every other selected tap/star note — to the other kind (no drag) |
+| Click an already-selected hold, or a selected slide's tail (tool ≠ Slide) | Toggle its release between normal and flick — and every other selected one along with it (no drag) |
 | Right-click | Delete note |
 | Shift+click | Add to / remove from selection |
 | Drag on empty space (select tool) | Box select |
@@ -102,9 +103,12 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | Wheel | Scroll · `Ctrl`+wheel zoom · middle-drag pan |
 | Click the waveform | Seek |
 | ⇆ toolbar button | Toggle vertical-scroll ⇄ horizontal-timeline layout |
-| 🔊 toolbar slider | Adjust audio playback volume |
+| Snap to grid toolbar button | Pull every note (and hold/slide length) that's merely within float noise of a grid line exactly onto it — checks every standard division (plain and triplet), not just the currently-selected one |
+| 🔔 toolbar button | Toggle note ticks during playback |
 | 🔔 tick-sound dropdown | Switch the playback tick between a synthesized beep and a sample SE (web audio backend only) |
+| 🔊 toolbar slider | Adjust audio playback volume |
+| Tick on/off, tick sound, and volume | App-wide settings, saved across projects |
 | Tempo… toolbar button | Add/edit mid-song BPM and time-signature changes — the grid, measure lines/numbering, and snapping follow each change from its time onward |
-| Note preview (left panel) | In-game-style preview: notes fly from a top-center spawn point out to a fan of 9 judgment circles, growing as they approach. Drag its right edge to resize; the speed control (game speed 1–10, or seconds directly) is an app-wide setting, saved across projects |
+| Note preview (left panel) | In-game-style preview: notes fly from a top-center spawn point out to a fan of 9 judgment circles, growing as they approach, with a live combo counter above it. Below: a 4-measure density close-up, then a whole-song per-measure density strip — click or drag it to seek, with a "m:ss · Measure N" tooltip, and it auto-scrolls the main view to match. Drag the panel's right edge to resize; display size (50–125%), speed (game speed 1–10, or seconds directly), and panel width are all app-wide settings, saved across projects |
 
 Everything autosaves; press **？** in the toolbar for this list in-app.

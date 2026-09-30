@@ -1157,6 +1157,8 @@ export async function createEditor(
       ["↑ / ↓", "Step playhead by one snap division"],
       ["Wheel", "Scroll · Ctrl+wheel zoom · middle-drag pan"],
       ["Click waveform", "Seek"],
+      ["Snap to grid button", "Pull near-grid notes/lengths exactly onto the grid"],
+      ["Click/drag song density strip (preview)", "Seek — shows a time/measure tooltip"],
     ];
     openDialog(
       "Shortcuts",
