@@ -17,6 +17,19 @@ export interface PreviewState {
   measureLabel: string;
   /** Notes/sec for the current measure and the 3 after it (index 0 = current). */
   measureNps: number[];
+  /** Notes/sec for every measure across the whole song — the whole-song density strip. */
+  songMeasureNps: number[];
+  /** Index into songMeasureNps that's current — highlighted as the strip's playhead. */
+  currentMeasureIndex: number;
+  /** How far through currentMeasureIndex playback is, 0-1 — positions the exact playhead
+   *  line within that measure's bar (currentMeasureIndex alone only picks the bar). */
+  currentMeasureFrac: number;
+  /** Song-strip position (measure index + fraction, matching songPositionAtPoint) under
+   *  the pointer — while hovering OR dragging — for the seek tooltip; null when neither. */
+  songHoverPos: number | null;
+  /** Formatted "m:ss · Measure N" text for songHoverPos (tempo math lives in editor.ts,
+   *  same reason measureLabel is pre-formatted there). */
+  songHoverLabel: string | null;
   /** Lane (1-9) the pointer is currently over the lane-stats chart for, if any — see
    *  laneAtPoint(). */
   hoverLane: number | null;
@@ -29,10 +42,10 @@ const MIN_SCALE = 0.14;
  *  at sizeScale 1 — ties the drawn size to the actual layout distance, so it only changes
  *  when that distance does, not whenever the panel's raw width does. */
 const JUDGE_RADIUS_RATIO = 0.15;
-/** Display size goes up to 200% (see editor.ts's size-scale control) — geometry reserves
+/** Display size goes up to 125% (see editor.ts's size-scale control) — geometry reserves
  *  room for that worst case up front so judgment positions never clip regardless of the
  *  CURRENT size, and so their centers don't shift as the size changes. */
-const JUDGE_RADIUS_MAX_SCALE = 2;
+const JUDGE_RADIUS_MAX_SCALE = 1.25;
 
 const COLORS = {
   bg: "#101018",
@@ -107,6 +120,11 @@ export class NotePreviewRenderer {
   private ctx: CanvasRenderingContext2D;
   private w = 0;
   private h = 0;
+  // How many measures the last draw() laid the song-density strip out over — hit-testing
+  // (songPositionAtPoint) needs this to invert a click's x back into a measure position,
+  // and it isn't otherwise a function of the panel's own fixed geometry (unlike lanes,
+  // always 9), so draw() has to remember it for whenever a pointer event asks.
+  private songMeasureCount = 0;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
@@ -129,30 +147,34 @@ export class NotePreviewRenderer {
    *  JUDGE_RADIUS_MAX_SCALE) so it never gets clipped at the top or sides, no matter the
    *  current size setting. The fan is kept in the upper part of the panel — the rest
    *  (statsTop downward) is used for the lane-stats bar chart below. */
-  private geometry(): { spawn: Point; fanRadius: number; statsTop: number } {
+  private geometry(): { spawn: Point; fanRadius: number; statsTop: number; comboY: number } {
     const edgeMargin = 3;
+    // Room for the "N Combo" readout, drawn just above the spawn point.
+    const topReserve = 16;
     // Reserves room for the measure/beat readout, the density chart and the lane-stats
     // chart below the fan (see statsLayout()).
     const bottomReserveFrac = 0.45;
     // judgeRadius = fanRadius * k at the largest size setting — lane 1/9 (level with
     // spawn, either side) need fanRadius + fanRadius*k to clear the sides, and their top
-    // edge (spawn.y - fanRadius*k) needs to clear the panel's top. The +10% covers the
-    // judgment ring's own stroke, which is drawn centered on that radius and so extends
+    // edge (spawn.y - fanRadius*k) needs to clear the combo readout above. The +10% covers
+    // the judgment ring's own stroke, which is drawn centered on that radius and so extends
     // a bit further out still.
     const k = JUDGE_RADIUS_RATIO * JUDGE_RADIUS_MAX_SCALE * 1.1;
     const widthLimit = Math.max(10, (this.w / 2 - edgeMargin) / (1 + k));
     const topRegionBottom = this.h * (1 - bottomReserveFrac);
     // Lane 5 (straight down) needs spawn.y + fanRadius + fanRadius*k to clear the
-    // reserved bottom area, and spawn.y itself is fanRadius*k + edgeMargin (below).
-    const heightLimit = Math.max(10, (topRegionBottom - edgeMargin) / (1 + 2 * k));
+    // reserved bottom area, and spawn.y itself is topReserve + fanRadius*k + edgeMargin.
+    const heightLimit = Math.max(10, (topRegionBottom - edgeMargin - topReserve) / (1 + 2 * k));
     const fanRadius = Math.max(16, Math.min(widthLimit, heightLimit));
-    const spawn = { x: this.w / 2, y: fanRadius * k + edgeMargin };
+    const spawn = { x: this.w / 2, y: topReserve + fanRadius * k + edgeMargin };
     // Start the stats block right after the fan's own actual bottom edge (which is often
     // well short of topRegionBottom — e.g. whenever the fan is width- rather than
     // height-limited) rather than always at the reserved boundary, so there's no dead gap
     // between them.
     const statsTop = Math.min(topRegionBottom, spawn.y + fanRadius * (1 + k));
-    return { spawn, fanRadius, statsTop };
+    // Sits just above the spawn point — where notes actually emerge from — rather than
+    // at a fixed distance from the panel's edge, so it tracks the fan as its size changes.
+    return { spawn, fanRadius, statsTop, comboY: spawn.y - 8 };
   }
 
   /** How the area below the fan (from statsTop down) splits into rows — the measure/beat
@@ -163,6 +185,8 @@ export class NotePreviewRenderer {
     measureY: number | null;
     npsTop: number | null;
     npsBottom: number | null;
+    songTop: number | null;
+    songBottom: number | null;
     laneTop: number;
     laneBottom: number;
   } {
@@ -173,6 +197,8 @@ export class NotePreviewRenderer {
     let measureY: number | null = null;
     let npsTop: number | null = null;
     let npsBottom: number | null = null;
+    let songTop: number | null = null;
+    let songBottom: number | null = null;
 
     const measureRowH = 11;
     if (bottom - cursor >= measureRowH + 10) {
@@ -185,7 +211,13 @@ export class NotePreviewRenderer {
       npsBottom = npsTop + npsRowH - 12;
       cursor = npsTop + npsRowH;
     }
-    return { measureY, npsTop, npsBottom, laneTop: cursor, laneBottom: bottom };
+    const songRowH = 22;
+    if (bottom - cursor >= songRowH + 10) {
+      songTop = cursor + 3;
+      songBottom = songTop + songRowH - 6;
+      cursor = songTop + songRowH;
+    }
+    return { measureY, npsTop, npsBottom, songTop, songBottom, laneTop: cursor, laneBottom: bottom };
   }
 
   /** Judgment-position display radius — proportional to the fan radius (the actual
@@ -212,7 +244,8 @@ export class NotePreviewRenderer {
     ctx.fillStyle = COLORS.bg;
     ctx.fillRect(0, 0, w, h);
 
-    const { spawn, fanRadius, statsTop } = this.geometry();
+    const { spawn, fanRadius, statsTop, comboY } = this.geometry();
+    this.drawCombo(s.notes, s.now, comboY);
     const judgeRadius = this.judgeRadius(fanRadius, s.sizeScale);
     const judgePositions: Point[] = [];
     for (let lane = 1; lane <= LANES; lane++) judgePositions.push(this.judgePos(spawn, fanRadius, lane));
@@ -365,8 +398,34 @@ export class NotePreviewRenderer {
     if (layout.npsTop !== null && layout.npsBottom !== null) {
       this.drawDensityChart(s.measureNps, layout.npsTop, layout.npsBottom);
     }
+    if (layout.songTop !== null && layout.songBottom !== null) {
+      this.drawSongDensityChart(
+        s.songMeasureNps,
+        s.currentMeasureIndex,
+        s.currentMeasureFrac,
+        layout.songTop,
+        layout.songBottom,
+      );
+      if (s.songHoverPos !== null && s.songHoverLabel !== null) {
+        this.drawSongTooltip(s.songHoverPos, s.songHoverLabel, layout.songTop);
+      }
+    }
     this.drawLaneStats(s.notes, layout.laneTop, layout.laneBottom);
     if (s.hoverLane !== null) this.drawLaneTooltip(s.notes, s.hoverLane, layout.laneTop);
+  }
+
+  /** Running combo — notes whose hit is already resolved as of `now`. A hold/slide-into-hold
+   *  resolves at its release (t + dur), matching the same "the tail counts, not the head"
+   *  rule ChartDoc.comboCount uses for the full-chart total; dur is 0 for everything else,
+   *  so t + dur already reduces to a plain hit-time check for those. */
+  private drawCombo(notes: Note[], now: number, y: number): void {
+    let combo = 0;
+    for (const n of notes) if (n.t + n.dur <= now) combo++;
+    const { ctx, w } = this;
+    ctx.font = "700 12px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillStyle = COLORS.labelStrong;
+    ctx.fillText(`${combo} Combo`, w / 2, y);
   }
 
   private drawMeasureRow(label: string, y: number): void {
@@ -398,6 +457,82 @@ export class NotePreviewRenderer {
       ctx.fillStyle = COLORS.label;
       ctx.fillText(nps[i].toFixed(1), cx, bottom + 9);
     }
+  }
+
+  /** Notes/sec per MEASURE across the whole song (one bar per measure, same unit as the
+   *  4-measure close-up above), with the current measure highlighted and an exact playhead
+   *  line within it — an at-a-glance map of where the chart gets dense, and where you
+   *  currently are in it. Doubles as a seek bar; see songPositionAtPoint(). */
+  private drawSongDensityChart(
+    nps: number[],
+    currentMeasureIndex: number,
+    currentMeasureFrac: number,
+    top: number,
+    bottom: number,
+  ): void {
+    const { ctx, w } = this;
+    this.songMeasureCount = nps.length;
+    if (nps.length === 0 || bottom - top < 4) return;
+    const barAreaH = bottom - top;
+    const barW = w / nps.length;
+    const maxNps = Math.max(1e-6, ...nps);
+    for (let i = 0; i < nps.length; i++) {
+      const segH = (nps[i] / maxNps) * barAreaH;
+      if (segH <= 0) continue;
+      ctx.fillStyle = i === currentMeasureIndex ? COLORS.densityNow : COLORS.density;
+      ctx.fillRect(i * barW, bottom - segH, Math.max(1, barW - 0.5), segH);
+    }
+    const px = Math.min(w, Math.max(0, (currentMeasureIndex + currentMeasureFrac) * barW));
+    ctx.strokeStyle = COLORS.densityNow;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(px, top);
+    ctx.lineTo(px, bottom);
+    ctx.stroke();
+  }
+
+  /** Single-line "m:ss · Measure N" bubble above the song strip, following the pointer
+   *  while hovering or dragging it (see songPositionAtPoint/songHoverPos). */
+  private drawSongTooltip(pos: number, label: string, songTop: number): void {
+    const { ctx, w } = this;
+    if (this.songMeasureCount <= 0) return;
+    const cx = (pos / this.songMeasureCount) * w;
+
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    const padX = 6;
+    const padY = 5;
+    const textW = ctx.measureText(label).width;
+    const boxW = textW + padX * 2;
+    const boxH = 11 + padY * 2 - 2;
+    const bx = Math.min(Math.max(cx - boxW / 2, 2), w - boxW - 2);
+    const by = Math.max(2, songTop - boxH - 4);
+
+    roundRect(ctx, bx, by, boxW, boxH, 4);
+    ctx.fillStyle = COLORS.tooltipBg;
+    ctx.fill();
+    ctx.strokeStyle = COLORS.tooltipBorder;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    ctx.fillStyle = COLORS.labelStrong;
+    ctx.fillText(label, bx + padX, by + padY + 11 - 3);
+  }
+
+  /** The song-strip position (measure index + fraction within it, matching
+   *  currentMeasureIndex/currentMeasureFrac) a canvas-space point maps to, for the caller
+   *  to convert into an actual seek time or tooltip text (this renderer doesn't know the
+   *  tempo map) — or null outside the strip's row. Lets the strip double as a seek bar.
+   *  `ignoreYBounds` skips the row's vertical extent — pass true while a drag begun on the
+   *  strip is already in progress, so it keeps tracking the pointer past the row's edges
+   *  (standard seek-bar behavior) instead of losing the drag the moment y strays off. */
+  songPositionAtPoint(x: number, y: number, ignoreYBounds = false): number | null {
+    const { statsTop } = this.geometry();
+    const { songTop, songBottom } = this.statsLayout(statsTop);
+    if (songTop === null || songBottom === null) return null;
+    if (!ignoreYBounds && (y < songTop || y > songBottom)) return null;
+    if (this.songMeasureCount <= 0) return null;
+    return Math.min(this.songMeasureCount, Math.max(0, (x / this.w) * this.songMeasureCount));
   }
 
   /** x, width of the lane-stats bar for the i-th displayed column (0 = leftmost, lane 9). */

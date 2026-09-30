@@ -82,9 +82,9 @@ function loadPreviewApproachSec(): number {
   return speedToApproachSec(6);
 }
 
-// Judgment-position display size, as a percentage (50-200, 100 = the reference size).
+// Judgment-position display size, as a percentage (50-125, 100 = the reference size).
 const PREVIEW_SCALE_MIN = 50;
-const PREVIEW_SCALE_MAX = 200;
+const PREVIEW_SCALE_MAX = 125;
 const PREVIEW_SCALE_KEY = "charter.previewSizeScalePct";
 
 function loadPreviewSizeScale(): number {
@@ -128,6 +128,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   let previewApproachSec = loadPreviewApproachSec();
   let previewSizeScale = loadPreviewSizeScale();
   let previewHoverLane: number | null = null;
+  // Drag state for the whole-song density strip doubling as a seek bar.
+  let previewSeeking = false;
+  let previewSeekResume = false;
+  // Song-strip position under the pointer, while hovering OR dragging — drives its tooltip.
+  let previewSongHoverPos: number | null = null;
   // Offsets from the earliest copied note and hold lengths are kept in BEATS (via the tempo
   // map), not seconds, so a phrase copied at one tempo pastes with the same rhythm at another.
   let clipboard: { dBeat: number; lane: number; kind: NoteKind; durBeat: number; slideId?: number; flickEnd?: boolean }[] = [];
@@ -185,6 +190,69 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       measureNps.push(count / dur);
     }
     return { measureLabel, measureNps };
+  }
+
+  /** Notes/sec for every measure across the whole song, plus which one is current — for
+   *  the preview panel's whole-song density strip. Same boundary self-heal as
+   *  currentMeasureInfo() above (see its comment): shifting each [secStart, secEnd)
+   *  window a hair earlier keeps a note placed exactly on a measure line in the measure
+   *  it visually starts. */
+  function songMeasureInfo(): { songMeasureNps: number[]; currentMeasureIndex: number; currentMeasureFrac: number } {
+    const tm = tempo();
+    const ts = timeSig();
+    const notes = doc().notes;
+    const BOUNDARY_EPS = 1e-6;
+
+    const currentMeasureIndex = Math.floor(ts.measureAt(tm.beatAt(player.displayTime)));
+    const endBeat = tm.beatAt(duration());
+    const measureCount = Math.max(1, Math.ceil(ts.measureAt(endBeat)) + 1);
+
+    const songMeasureNps: number[] = [];
+    for (let i = 0; i < measureCount; i++) {
+      const secStart = tm.timeAt(ts.beatAtMeasure(i)) - BOUNDARY_EPS;
+      const secEnd = tm.timeAt(ts.beatAtMeasure(i + 1)) - BOUNDARY_EPS;
+      const dur = Math.max(1e-6, secEnd - secStart);
+      let count = 0;
+      for (const n of notes) if (n.t >= secStart && n.t < secEnd) count++;
+      songMeasureNps.push(count / dur);
+    }
+    // Undoes the note-counting epsilon above — the visual playhead line wants the measure's
+    // real boundary, not one nudged a hair earlier to keep a boundary-exact note in the
+    // right bucket.
+    const curStart = tm.timeAt(ts.beatAtMeasure(currentMeasureIndex));
+    const curEnd = tm.timeAt(ts.beatAtMeasure(currentMeasureIndex + 1));
+    const currentMeasureFrac = Math.min(1, Math.max(0, (player.displayTime - curStart) / Math.max(1e-6, curEnd - curStart)));
+    return { songMeasureNps, currentMeasureIndex, currentMeasureFrac };
+  }
+
+  /** Converts a song-density-strip position (measure index + fraction within it, from
+   *  NotePreviewRenderer.songPositionAtPoint) into an actual seek time and jumps there —
+   *  the strip doubles as a seek bar. */
+  function seekToSongPosition(measurePos: number): void {
+    const tm = tempo();
+    const ts = timeSig();
+    const measureIndex = Math.max(0, Math.floor(measurePos));
+    const frac = measurePos - measureIndex;
+    const beatStart = ts.beatAtMeasure(measureIndex);
+    const beatEnd = ts.beatAtMeasure(measureIndex + 1);
+    const t = tm.timeAt(beatStart + frac * (beatEnd - beatStart));
+    player.seek(Math.max(0, Math.min(duration(), t)));
+    scrollToPlayhead(player.time);
+    requestDraw();
+  }
+
+  /** "m:ss · Measure N" for the song-strip hover/drag tooltip. */
+  function formatSongPosition(measurePos: number): string {
+    const tm = tempo();
+    const ts = timeSig();
+    const measureIndex = Math.max(0, Math.floor(measurePos));
+    const frac = measurePos - measureIndex;
+    const beatStart = ts.beatAtMeasure(measureIndex);
+    const beatEnd = ts.beatAtMeasure(measureIndex + 1);
+    const t = Math.max(0, Math.min(duration(), tm.timeAt(beatStart + frac * (beatEnd - beatStart))));
+    const m = Math.floor(t / 60);
+    const sec = Math.floor(t - m * 60);
+    return `${m}:${String(sec).padStart(2, "0")} · Measure ${measureIndex + 1}`;
   }
 
   const fallbackDuration = () => {
@@ -739,13 +807,43 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   const previewWrap = el("div", { class: "preview-canvas-wrap" }, previewCanvas);
   const previewRenderer = new NotePreviewRenderer(previewCanvas);
 
+  previewCanvas.addEventListener("pointerdown", (e) => {
+    const rect = previewCanvas.getBoundingClientRect();
+    const pos = previewRenderer.songPositionAtPoint(e.clientX - rect.left, e.clientY - rect.top);
+    if (pos === null) return;
+    previewSeeking = true;
+    previewSongHoverPos = pos;
+    // Pause while seeking — same reason the main waveform's scrub gesture does (see
+    // its pointerdown handler): re-seeking a live source every pointermove otherwise
+    // sounds like a glitch storm.
+    previewSeekResume = player.playing;
+    if (previewSeekResume) player.pause();
+    seekToSongPosition(pos);
+    previewCanvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
   previewCanvas.addEventListener("pointermove", (e) => {
     const rect = previewCanvas.getBoundingClientRect();
-    previewHoverLane = previewRenderer.laneAtPoint(e.clientX - rect.left, e.clientY - rect.top);
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    previewHoverLane = previewRenderer.laneAtPoint(x, y);
+    // While dragging, ignore the row's vertical bounds (see songPositionAtPoint) so the
+    // tooltip and the seek both keep tracking even if the pointer strays off the strip.
+    previewSongHoverPos = previewRenderer.songPositionAtPoint(x, y, previewSeeking);
+    if (previewSeeking && previewSongHoverPos !== null) seekToSongPosition(previewSongHoverPos);
   });
   previewCanvas.addEventListener("pointerleave", () => {
     previewHoverLane = null;
+    if (!previewSeeking) previewSongHoverPos = null;
   });
+  const endPreviewSeek = () => {
+    if (!previewSeeking) return;
+    previewSeeking = false;
+    previewSongHoverPos = null;
+    if (previewSeekResume && !player.playing) player.play();
+  };
+  previewCanvas.addEventListener("pointerup", endPreviewSeek);
+  previewCanvas.addEventListener("pointercancel", endPreviewSeek);
 
   function setPreviewApproachSec(sec: number): void {
     previewApproachSec = Math.min(PREVIEW_SEC_MAX, Math.max(PREVIEW_SEC_MIN, sec));
@@ -2054,6 +2152,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
     // The preview animates continuously against the playhead, independent of the main
     // canvas's needsDraw gating.
     const measureInfo = currentMeasureInfo();
+    const songInfo = songMeasureInfo();
     previewRenderer.draw({
       now: player.displayTime,
       approachSec: previewApproachSec,
@@ -2061,6 +2160,11 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       sizeScale: previewSizeScale,
       measureLabel: measureInfo.measureLabel,
       measureNps: measureInfo.measureNps,
+      songMeasureNps: songInfo.songMeasureNps,
+      currentMeasureIndex: songInfo.currentMeasureIndex,
+      currentMeasureFrac: songInfo.currentMeasureFrac,
+      songHoverPos: previewSongHoverPos,
+      songHoverLabel: previewSongHoverPos !== null ? formatSongPosition(previewSongHoverPos) : null,
       hoverLane: previewHoverLane,
     });
     requestAnimationFrame(frame);
