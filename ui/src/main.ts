@@ -33,6 +33,10 @@ async function mount(create: () => Promise<View>): Promise<void> {
   }
   if (disposing) await disposing;
   if (epoch !== mountEpoch) return; // a newer mount raced past us
+  // Clear any title the outgoing view set — a view that wants one (currently only the
+  // editor) sets its own right back during create() below; one that doesn't (the
+  // library, the connect screen) should leave the topbar without a stale song title.
+  setTopbarTitle(null);
   let view: View;
   try {
     view = await create();
@@ -72,10 +76,24 @@ async function refreshTopbar(): Promise<void> {
   }
 }
 
+// Set by the current view (currently only the editor) to show its own title right next
+// to the wordmark, ahead of the spacer — so its position never moves regardless of the
+// title's length, unlike when it lived inside the editor's own per-view toolbar.
+const topbarTitleBtn = el("button", { class: "btn btn-ghost topbar-title" });
+topbarTitleBtn.hidden = true;
+
+function setTopbarTitle(text: string | null, onClick?: () => void, tooltip?: string): void {
+  topbarTitleBtn.hidden = text === null;
+  topbarTitleBtn.textContent = text ?? "";
+  topbarTitleBtn.onclick = onClick ?? null;
+  topbarTitleBtn.title = tooltip ?? "";
+}
+
 const topbar = el(
   "div",
   { class: "topbar" },
   el("span", { class: "wordmark" }, "CHARTER", el("span", { class: "note-glyph", text: " ♪" })),
+  topbarTitleBtn,
   el("span", { class: "spacer" }),
   serverChip,
 );
@@ -101,7 +119,7 @@ async function goConnect(): Promise<void> {
 
 async function goEditor(projectId: string): Promise<void> {
   try {
-    await mount(() => createEditor(projectId, () => void goLibrary()));
+    await mount(() => createEditor(projectId, () => void goLibrary(), setTopbarTitle));
   } catch (e) {
     toast(String(e), "error");
     // the library was already disposed to make room for the editor — bring it back

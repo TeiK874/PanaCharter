@@ -127,7 +127,11 @@ function loadPreviewWidthPx(): number | null {
   return Number.isFinite(raw) && raw >= 140 ? raw : null;
 }
 
-export async function createEditor(projectId: string, goBack: () => void): Promise<EditorView> {
+export async function createEditor(
+  projectId: string,
+  goBack: () => void,
+  setTitle: (text: string, onClick?: () => void, tooltip?: string) => void,
+): Promise<EditorView> {
   const data: ProjectData = await api.projectLoad(projectId);
   const manifest = data.manifest;
   const editorMeta = data.editor;
@@ -502,12 +506,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   }
 
   // --- toolbar --------------------------------------------------------------
-  const titleBtn = el("button", {
-    class: "btn btn-ghost",
-    text: manifest.name || "(untitled)",
-    title: "Song settings",
-    onclick: () => openSettings(),
-  });
+  setTitle(manifest.name || "(untitled)", () => openSettings(), "Song settings");
 
   const tabsHost = el("div", { class: "row" });
   const starInput = el("input", {
@@ -751,7 +750,6 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
       "div",
       { class: "group" },
       el("button", { class: "btn", text: "← Library", onclick: () => goBack() }),
-      titleBtn,
     ),
     el(
       "div",
@@ -1424,7 +1422,7 @@ export async function createEditor(projectId: string, goBack: () => void): Promi
   function openSettings(): void {
     openMetadataDialog(data.id, manifest, docs, {
       onChanged: () => {
-        titleBtn.textContent = manifest.name || "(untitled)";
+        setTitle(manifest.name || "(untitled)", () => openSettings(), "Song settings");
         bpmInput.value = String(bpm());
         renderTabs();
         markDirty();

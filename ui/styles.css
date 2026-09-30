@@ -58,6 +58,8 @@ body {
 }
 .wordmark .note-glyph { color: var(--pink); letter-spacing: 0; }
 
+.topbar-title { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .topbar .spacer { flex: 1; }
 
 .server-chip {
