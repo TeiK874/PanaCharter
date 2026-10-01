@@ -297,9 +297,28 @@ export class NotePreviewRenderer {
     }
 
     // Notes judged at the same instant — each gets a horizontal tick over its own circle
-    // (see below), rather than a line spanning between them.
-    const timeCounts = new Map<number, number>();
-    for (const n of s.notes) timeCounts.set(n.t, (timeCounts.get(n.t) ?? 0) + 1);
+    // (see below), rather than a line spanning between them. Grouped the same way as
+    // render.ts's drawSimLines (same SIM_EPS, same "anchor to the group's first member"
+    // rule) — keying this by exact n.t instead would miss notes whose times differ by a few
+    // float ulps (e.g. a hold's computed tail vs. an independently-placed tap) even though
+    // the editor's own sim-line already shows them as simultaneous.
+    const SIM_EPS = 1e-6;
+    const simultaneous = new Set<number>(); // note ids in a group of 2+
+    {
+      const sorted = [...s.notes].sort((a, b) => a.t - b.t);
+      let group: Note[] = [];
+      const flush = () => {
+        if (group.length >= 2) for (const n of group) simultaneous.add(n.id);
+      };
+      for (const n of sorted) {
+        if (group.length && n.t - group[0].t > SIM_EPS) {
+          flush();
+          group = [];
+        }
+        group.push(n);
+      }
+      flush();
+    }
 
     for (const n of s.notes) {
       const untilHit = n.t - s.now;
@@ -382,7 +401,7 @@ export class NotePreviewRenderer {
       }
 
       // Simultaneous-note mark, overlaid on top of the circle like the slide arrow above.
-      if ((timeCounts.get(n.t) ?? 0) >= 2) {
+      if (simultaneous.has(n.id)) {
         ctx.beginPath();
         ctx.moveTo(headPos.x - headRadius * 0.6, headPos.y);
         ctx.lineTo(headPos.x + headRadius * 0.6, headPos.y);
