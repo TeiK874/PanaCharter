@@ -227,6 +227,16 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
 .tempo-row input[type="number"] { width: 90px; }
 .dialog-sep { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 
+.lane-keys-row { flex-wrap: wrap; margin: 10px 0; }
+.lane-keys-row input[type="number"] { width: 68px; padding: 4px 6px; }
+.lane-key-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.lane-key-num { font-size: 10px; color: var(--muted); }
+.lane-key-input {
+  width: 36px; padding: 6px 0;
+  text-align: center; text-transform: lowercase; font-size: 15px;
+  cursor: pointer; caret-color: transparent;
+}
+
 /* ---- toasts ---- */
 
 .toast-host {

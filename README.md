@@ -102,6 +102,7 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | `↑` / `↓` (or `←` / `→`) | Step the playhead by one snap division |
 | Wheel | Scroll · `Ctrl`+wheel zoom · middle-drag pan |
 | Click the waveform | Seek |
+| `A` `S` `D` `F` `G` `H` `J` `K` `L` | Place a tap at the playhead, in lanes 9→1 left to right — works during playback too. Hold the key down while playing to place a hold instead of a tap. In ⚙ Settings: click a lane's key box then press any key to rebind it (auto-advances to the next box); how much earlier than the keypress the note lands (input-lag compensation) and how long a hold-down counts as a hold are also adjustable there — all app-wide settings saved across projects |
 | ⇆ toolbar button | Toggle vertical-scroll ⇄ horizontal-timeline layout |
 | Snap to grid toolbar button | Pull every note (and hold/slide length) that's merely within float noise of a grid line exactly onto it — checks every standard division (plain and triplet), not just the currently-selected one |
 | 🔔 toolbar button | Toggle note ticks during playback |

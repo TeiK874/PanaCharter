@@ -127,6 +127,69 @@ function loadPreviewWidthPx(): number | null {
   return Number.isFinite(raw) && raw >= 140 ? raw : null;
 }
 
+// Lane keys for live tap/hold entry (lanes 1-9, left to right) — app-wide, like the
+// settings above. Defaults to a home-row-ish layout so all 9 fall under one hand.
+const LANE_KEYS_KEY = "charter.laneKeys";
+const DEFAULT_LANE_KEYS = ["a", "s", "d", "f", "g", "h", "j", "k", "l"];
+
+function loadLaneKeys(): string[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(LANE_KEYS_KEY) ?? "null");
+    if (Array.isArray(raw) && raw.length === 9 && raw.every((k) => typeof k === "string")) {
+      return raw as string[];
+    }
+  } catch {
+    // fall through to the default below
+  }
+  return [...DEFAULT_LANE_KEYS];
+}
+
+// Plain (no-modifier) keys the editor already binds elsewhere — rebinding a lane onto one
+// of these would silently break that existing shortcut, so the rebind UI refuses them.
+const RESERVED_PLAIN_KEYS = new Set([
+  "1", "2", "3", "4", "5", "6",
+  "Delete", "Backspace", "Escape", "Home", "End",
+  "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ",
+]);
+
+// How long a lane key must be held, in SONG time (not wall-clock), before release turns
+// the tap it placed into a hold instead. Using song time rather than real elapsed time
+// means this only ever fires while playing — paused, the playhead doesn't move, so the
+// span is always 0 regardless of how long the key is physically held, which is exactly
+// the "only while the song is actually playing" behavior we want, with no separate check.
+// App-wide setting, adjustable in ⚙ Settings.
+const LIVE_HOLD_THRESHOLD_KEY = "charter.liveHoldThresholdSec";
+const LIVE_HOLD_THRESHOLD_MIN = 0.02;
+const LIVE_HOLD_THRESHOLD_MAX = 1;
+const LIVE_HOLD_THRESHOLD_DEFAULT = 0.15;
+
+function loadLiveHoldThresholdSec(): number {
+  const stored = localStorage.getItem(LIVE_HOLD_THRESHOLD_KEY);
+  if (stored === null) return LIVE_HOLD_THRESHOLD_DEFAULT;
+  const raw = Number(stored);
+  return Number.isFinite(raw) && raw >= LIVE_HOLD_THRESHOLD_MIN && raw <= LIVE_HOLD_THRESHOLD_MAX
+    ? raw
+    : LIVE_HOLD_THRESHOLD_DEFAULT;
+}
+
+// Lane-key input lands a bit after the beat the player actually meant — keydown handling,
+// audio output latency, and plain human reaction time all push it later. This shifts the
+// placed time earlier to compensate; app-wide setting, adjustable in ⚙ Settings since the
+// right value depends on the player's own hardware/reflexes, not anything about the song.
+const LIVE_TAP_OFFSET_KEY = "charter.liveTapOffsetSec";
+const LIVE_TAP_OFFSET_MIN = -0.5;
+const LIVE_TAP_OFFSET_MAX = 0.5;
+const LIVE_TAP_OFFSET_DEFAULT = 0.1;
+
+function loadLiveTapOffsetSec(): number {
+  const stored = localStorage.getItem(LIVE_TAP_OFFSET_KEY);
+  if (stored === null) return LIVE_TAP_OFFSET_DEFAULT;
+  const raw = Number(stored);
+  return Number.isFinite(raw) && raw >= LIVE_TAP_OFFSET_MIN && raw <= LIVE_TAP_OFFSET_MAX
+    ? raw
+    : LIVE_TAP_OFFSET_DEFAULT;
+}
+
 export async function createEditor(
   projectId: string,
   goBack: () => void,
@@ -166,6 +229,14 @@ export async function createEditor(
   let previewApproachSec = loadPreviewApproachSec();
   let previewSizeScale = loadPreviewSizeScale();
   let previewHoverLane: number | null = null;
+  // Keyboard lane keys for live tap/hold entry — app-wide setting (not per-project).
+  let laneKeys = loadLaneKeys();
+  let liveTapOffsetSec = loadLiveTapOffsetSec();
+  let liveHoldThresholdSec = loadLiveHoldThresholdSec();
+  // One entry per lane currently held down via a lane key, from keydown until its keyup —
+  // the doc is captured at keydown so a difficulty switch mid-press can't corrupt the undo
+  // transaction of the other difficulty.
+  const liveLanePresses = new Map<number, { doc: ChartDoc; pre: string; note: Note; downTime: number }>();
   // Drag state for the whole-song density strip doubling as a seek bar.
   let previewSeeking = false;
   let previewSeekResume = false;
@@ -820,7 +891,7 @@ export async function createEditor(
     el(
       "div",
       { class: "group" },
-      el("button", { class: "btn", text: "⚙ Preview…", title: "Note-preview settings", onclick: () => openPreviewSettingsDialog() }),
+      el("button", { class: "btn", text: "⚙ Settings…", title: "App settings", onclick: () => openAppSettingsDialog() }),
     ),
     el("div", { class: "group" }, el("button", { class: "btn", text: "？", title: "Shortcuts", onclick: showHelp })),
     el("div", { class: "spacer", style: "flex:1" }),
@@ -963,12 +1034,147 @@ export async function createEditor(
     oninput: () => setPreviewSizeScale(Number(previewSizeInput.value)),
   });
 
-  function openPreviewSettingsDialog(): void {
+  // One "press a key to rebind" box per lane for the live tap/hold entry keys below, in
+  // left-to-right keyboard order — laneKeys[i] is lane 9-i (see laneForKey). Capturing the
+  // raw keydown (rather than relying on typed text) lets a non-character key like an arrow
+  // or Enter be bound too, not just letters. Rejects a reserved shortcut key or one already
+  // bound to another lane instead of silently creating a conflicting or dead binding.
+  const laneKeyInputs = laneKeys.map((key) =>
+    el("input", {
+      type: "text",
+      class: "lane-key-input",
+      value: key,
+      readonly: true, // the field only ever changes via the keydown capture below
+    }),
+  );
+  laneKeyInputs.forEach((input, i) => {
+    input.title = `Lane ${9 - i} key — click, then press a key to change it`;
+    input.addEventListener("keydown", (e) => {
+      // Let Tab/Shift/other pure modifiers, and any Ctrl/Alt/Meta combo (Ctrl+S and
+      // friends), pass through untouched instead of capturing them — only Tab's own
+      // default (move focus) is actually useful here, and hijacking an app-wide modifier
+      // shortcut just because this box happens to be focused would be surprising.
+      if (
+        e.ctrlKey ||
+        e.metaKey ||
+        e.altKey ||
+        ["Tab", "Shift", "Control", "Alt", "Meta", "CapsLock"].includes(e.key)
+      ) {
+        return;
+      }
+      if (RESERVED_PLAIN_KEYS.has(e.key) || e.key.length === 0 || e.key === "Unidentified") {
+        e.preventDefault();
+        toast(`"${e.key}" is reserved for an existing shortcut`, "error");
+        return;
+      }
+      e.preventDefault();
+      const dupIndex = laneKeys.findIndex((k, j) => j !== i && k.toLowerCase() === e.key.toLowerCase());
+      if (dupIndex !== -1) {
+        toast(`"${e.key}" is already lane ${9 - dupIndex}'s key`, "error");
+        return;
+      }
+      laneKeys[i] = e.key;
+      laneKeyInputs[i].value = e.key;
+      saveLaneKeys();
+      // Advance to the next box (one lane to the right) so rebinding a whole row is one
+      // keypress per lane, left to right, without reaching for the mouse in between.
+      laneKeyInputs[i + 1]?.focus();
+    });
+  });
+  const laneKeyCells = laneKeyInputs.map((input, i) =>
+    el("div", { class: "lane-key-cell" }, el("span", { class: "lane-key-num", text: String(9 - i) }), input),
+  );
+
+  function resetLaneKeys(): void {
+    laneKeys = [...DEFAULT_LANE_KEYS];
+    saveLaneKeys();
+    laneKeyInputs.forEach((input, i) => (input.value = laneKeys[i]));
+  }
+
+  function clearLaneKeys(): void {
+    laneKeys = laneKeys.map(() => "");
+    saveLaneKeys();
+    laneKeyInputs.forEach((input) => (input.value = ""));
+    // Lane 9 is the leftmost box (index 0) — start a left-to-right rebind from there.
+    laneKeyInputs[0]?.focus();
+  }
+
+  const liveTapOffsetInput = el("input", {
+    type: "number",
+    min: String(LIVE_TAP_OFFSET_MIN),
+    max: String(LIVE_TAP_OFFSET_MAX),
+    step: "0.01",
+    value: String(liveTapOffsetSec),
+    title: "How much earlier than the keypress to place the note, in seconds",
+    oninput: () => {
+      const raw = Number(liveTapOffsetInput.value);
+      liveTapOffsetSec = Number.isFinite(raw)
+        ? Math.min(LIVE_TAP_OFFSET_MAX, Math.max(LIVE_TAP_OFFSET_MIN, raw))
+        : LIVE_TAP_OFFSET_DEFAULT;
+      localStorage.setItem(LIVE_TAP_OFFSET_KEY, String(liveTapOffsetSec));
+    },
+  });
+
+  const liveHoldThresholdInput = el("input", {
+    type: "number",
+    min: String(LIVE_HOLD_THRESHOLD_MIN),
+    max: String(LIVE_HOLD_THRESHOLD_MAX),
+    step: "0.01",
+    value: String(liveHoldThresholdSec),
+    title: "How long a lane key must be held, while playing, to place a hold instead of a tap",
+    oninput: () => {
+      const raw = Number(liveHoldThresholdInput.value);
+      liveHoldThresholdSec = Number.isFinite(raw)
+        ? Math.min(LIVE_HOLD_THRESHOLD_MAX, Math.max(LIVE_HOLD_THRESHOLD_MIN, raw))
+        : LIVE_HOLD_THRESHOLD_DEFAULT;
+      localStorage.setItem(LIVE_HOLD_THRESHOLD_KEY, String(liveHoldThresholdSec));
+    },
+  });
+
+  function openAppSettingsDialog(): void {
     openDialog(
-      "Note preview settings",
+      "Settings",
       el("p", {
         class: "dialog-body",
-        text: "Game speed 1-10, or seconds directly — how long a note takes from spawn to the judgment line.",
+        text:
+          "Lane keys — press one to place a tap note at the playhead (works during playback, lane " +
+          "numbers shown above each key); hold it down while playing to place a hold instead.",
+      }),
+      el(
+        "div",
+        { class: "row lane-keys-row" },
+        ...laneKeyCells,
+        el("button", { class: "btn btn-ghost", text: "Clear", title: "Unbind all 9 lanes", onclick: clearLaneKeys }),
+        el("button", { class: "btn btn-ghost", text: "Reset", title: "Reset to the default A-L layout", onclick: resetLaneKeys }),
+      ),
+      el(
+        "div",
+        { class: "row lane-keys-row" },
+        el("span", { class: "mini-label", text: "Input offset" }),
+        liveTapOffsetInput,
+        el("span", { class: "mini-label", text: "sec earlier" }),
+      ),
+      el("p", {
+        class: "dialog-body",
+        text:
+          "Positive = notes land earlier than the keypress, to compensate for input/processing lag. " +
+          "Increase this if lane-key notes land noticeably late.",
+      }),
+      el(
+        "div",
+        { class: "row lane-keys-row" },
+        el("span", { class: "mini-label", text: "Hold threshold" }),
+        liveHoldThresholdInput,
+        el("span", { class: "mini-label", text: "sec" }),
+      ),
+      el("p", {
+        class: "dialog-body",
+        text: "How long a lane key must be held down, while playing, before releasing it places a hold instead of a tap.",
+      }),
+      el("hr", { class: "dialog-sep" }),
+      el("p", {
+        class: "dialog-body",
+        text: "Note preview — game speed 1-10, or seconds directly, for how long a note takes from spawn to the judgment line.",
       }),
       el(
         "div",
@@ -1159,6 +1365,7 @@ export async function createEditor(
       ["Click waveform", "Seek"],
       ["Snap to grid button", "Pull near-grid notes/lengths exactly onto the grid"],
       ["Click/drag song density strip (preview)", "Seek — shows a time/measure tooltip"],
+      ["A S D F G H J K L", "Place a tap at the playhead, in lanes 9→1 left to right — works during playback; hold the key while playing to place a hold instead. Keys, input offset, and hold threshold all configurable in ⚙ Settings"],
     ];
     openDialog(
       "Shortcuts",
@@ -2000,6 +2207,54 @@ export async function createEditor(
     requestDraw();
   }
 
+  // --- live lane-key tap/hold entry --------------------------------------------
+  function saveLaneKeys(): void {
+    localStorage.setItem(LANE_KEYS_KEY, JSON.stringify(laneKeys));
+  }
+
+  // laneKeys[i] is the i-th key left to right on the keyboard — mapped to lane 9-i so the
+  // leftmost key is the highest-numbered (rightmost on screen) lane.
+  function laneForKey(key: string): number | null {
+    const lower = key.toLowerCase();
+    const idx = laneKeys.findIndex((k) => k.toLowerCase() === lower);
+    return idx === -1 ? null : 9 - idx;
+  }
+
+  /** The time a lane key event should land at — the playhead, shifted earlier by the
+   *  configured input-lag compensation (never before the start of the song). */
+  function liveTapTime(): number {
+    return snapTime(Math.max(0, player.time - liveTapOffsetSec));
+  }
+
+  /** Places a tap immediately on keydown, for instant feedback — finishLaneTap below may
+   *  still turn it into a hold once the key comes back up. */
+  function startLaneTap(lane: number): void {
+    if (liveLanePresses.has(lane)) return; // already down (shouldn't happen, but stay safe)
+    const d = doc();
+    const t = liveTapTime();
+    const pre = d.begin();
+    const note = d.place(t, lane, "tap", 0);
+    d.selection.clear();
+    d.selection.add(note.id);
+    liveLanePresses.set(lane, { doc: d, pre, note, downTime: t });
+    requestDraw();
+    updateStatus();
+  }
+
+  function finishLaneTap(lane: number): void {
+    const press = liveLanePresses.get(lane);
+    if (!press) return;
+    liveLanePresses.delete(lane);
+    const dur = liveTapTime() - press.downTime;
+    if (dur >= liveHoldThresholdSec) {
+      press.note.kind = "hold";
+      press.note.dur = dur;
+    }
+    press.doc.commit(press.pre);
+    requestDraw();
+    updateStatus();
+  }
+
   // --- keyboard ---------------------------------------------------------------
   function onKey(e: KeyboardEvent): void {
     const target = e.target as HTMLElement;
@@ -2120,6 +2375,17 @@ export async function createEditor(
       });
       return;
     }
+    // Live lane-key tap/hold entry — independent of the selected tool, and works whether
+    // the song is playing or paused. Ignore OS auto-repeat so holding the key doesn't
+    // place a note on every repeat tick; the hold-vs-tap decision is made once, on keyup.
+    if (!ctrl && !e.repeat) {
+      const lane = laneForKey(e.key);
+      if (lane !== null) {
+        e.preventDefault();
+        startLaneTap(lane);
+        return;
+      }
+    }
     switch (e.key) {
       case "1":
         setTool("select");
@@ -2179,6 +2445,24 @@ export async function createEditor(
     }
   }
   window.addEventListener("keydown", onKey);
+
+  // Keyup isn't routed through onKey's input/dialog/gesture guards: whatever state the
+  // app is in, a key that's down should still be resolvable, or a lane could get stuck
+  // "held" (e.g. if a dialog opens mid-press). finishLaneTap itself is a no-op for any
+  // lane that isn't actually pending, so this is safe to call unconditionally.
+  function onKeyUp(e: KeyboardEvent): void {
+    const lane = laneForKey(e.key);
+    if (lane !== null) finishLaneTap(lane);
+  }
+  window.addEventListener("keyup", onKeyUp);
+
+  // Losing window focus entirely (alt-tab, etc.) can swallow the matching keyup — finish
+  // any still-open lane presses now (same tap/hold decision as a normal keyup) rather than
+  // leaving them stuck open forever.
+  function onBlur(): void {
+    for (const lane of [...liveLanePresses.keys()]) finishLaneTap(lane);
+  }
+  window.addEventListener("blur", onBlur);
 
   // --- render loop ------------------------------------------------------------
   function requestDraw(): void {
@@ -2282,6 +2566,8 @@ export async function createEditor(
     async dispose() {
       disposed = true;
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
       resizeObserver.disconnect();
       previewResizeObserver.disconnect();
       player.dispose();
