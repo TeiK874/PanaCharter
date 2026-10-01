@@ -1796,7 +1796,12 @@ export async function createEditor(
         if (!info || info.kind !== "lanes") return;
         if (gesture.resizeNote) {
           const n = gesture.resizeNote;
+          const beforeDur = n.dur;
           n.dur = Math.max(localStepSec(n.t), snapTime(info.t) - n.t);
+          // Same "did it actually move" tracking as the plain-move branch below — a tail
+          // drag that changes the duration is a real edit, not a click, and must not also
+          // trigger kindTogglePending's flick-toggle in finishGesture.
+          if (n.dur !== beforeDur) gesture.moved = true;
         } else {
           // Move by an INTEGER number of grid slots (tempo.ts) — counted on the same
           // segment-local grid that's drawn and snapped to, so a drag across a tempo change
