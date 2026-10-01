@@ -461,7 +461,18 @@ export async function createEditor(
       // ulps off the freshly-recomputed precise value even when it's already correct.
       // Comparing raw would flag (and rewrite) it as "changed" every single time this
       // runs after a reload, forever, for a difference that was never real.
-      if (round6(newT) !== round6(beforeT) || round6(newDur) !== round6(beforeDur)) {
+      //
+      // The tail is compared as round6(t + dur), NOT round6(dur) on its own — a duration
+      // can round to the very same 6-decimal value either way while the ACTUAL tail
+      // (what toSif() exports and what a coincident note's own time is compared against)
+      // crosses into the next microsecond, e.g. 16.714615 + 0.461538... rounds the same
+      // at 6dp whether the true value is .4615380 or .4615384, but head+dur rounds to
+      // .176153 for one and .176154 for the other — comparing dur alone would miss
+      // exactly the drift this function exists to self-heal.
+      if (
+        round6(newT) !== round6(beforeT) ||
+        round6(newT + newDur) !== round6(beforeT + beforeDur)
+      ) {
         n.t = newT;
         n.dur = newDur;
         changed++;

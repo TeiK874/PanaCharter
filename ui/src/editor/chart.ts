@@ -139,24 +139,41 @@ export class ChartDoc {
       const ordered = [...group].sort((a, b) => a.t - b.t);
       chainTailIds.add(ordered[ordered.length - 1].id);
     }
+    // A hold/slide-hold's effect_value is derived as the GAP between the already-rounded
+    // head and tail, not round6(dur) on its own — rounding the duration independently can
+    // round the head and tail of "the same instant" (shared with some other, separately
+    // placed note) into different 6-decimal buckets, each up to 0.5µs off, so the
+    // reconstructed tail (timing_sec + effect_value) would land more than the server's
+    // SIMULTANEOUS_EPSILON_SEC from that other note even though they were exactly
+    // coincident (within the slot grid's ~1e-13) beforehand.
+    //
+    // round6(tail) - round6(head) is mathematically a clean multiple of 1e-6 (both operands
+    // are), but the SUBTRACTION itself lands a few ULPs off that — e.g. 17.176154 - 16.714615
+    // comes out 0.4615390000000019, not 0.461539 — which is exactly the kind of
+    // long-decimal value serde_json 1.0.150 mis-parses on the way back in (see round6's own
+    // comment). Rounding that gap a second time snaps it back onto the clean value, short
+    // enough to serialize safely, while 0.4615390000000019 and 0.461539 both reconstruct
+    // (head + effect_value) within a few ULPs of the same tail either way.
+    const holdEffectValue = (t: number, dur: number): number => round6(round6(t + dur) - t);
     return this.notes.map((n) => {
+      const t = round6(n.t);
       if (n.kind === "slide") {
         const isTail = chainTailIds.has(n.id);
         const isFlickEnd = isTail && n.flickEnd === true;
         const isHoldEnd = isTail && !isFlickEnd && n.dur > 0;
         return {
-          timing_sec: round6(n.t),
+          timing_sec: t,
           position: n.lane,
           effect: isFlickEnd ? 14 : isHoldEnd ? 13 : 11,
-          effect_value: isHoldEnd ? round6(n.dur) : 0,
+          effect_value: isHoldEnd ? holdEffectValue(n.t, n.dur) : 0,
           notes_level: n.slideId,
         };
       }
       return {
-        timing_sec: round6(n.t),
+        timing_sec: t,
         position: n.lane,
         effect: n.kind === "hold" ? (n.flickEnd ? 10 : 3) : n.kind === "star" ? 4 : n.kind === "flick" ? 8 : 1,
-        effect_value: n.kind === "hold" ? round6(n.dur) : 0,
+        effect_value: n.kind === "hold" ? holdEffectValue(n.t, n.dur) : 0,
       };
     });
   }
