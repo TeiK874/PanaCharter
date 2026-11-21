@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "Window permissions the UI uses: close-request handling and full-screen preview.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-destroy"
+  ]
+}

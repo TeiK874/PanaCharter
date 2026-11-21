@@ -10,6 +10,8 @@ export interface TauriWindow {
   /** Force-closes the window without re-raising onCloseRequested — unlike close(), which
    *  would just ask again and recurse into any listener that calls it. */
   destroy(): Promise<void>;
+  /** Puts the whole OS window into (or out of) full screen. */
+  setFullscreen(fullscreen: boolean): Promise<void>;
 }
 
 declare global {

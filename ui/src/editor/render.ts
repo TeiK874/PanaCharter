@@ -571,9 +571,20 @@ export class Renderer {
     // bit-identical, only within float noise (~1e-13) of each other — so matching the
     // server's own tolerance here shows exactly what the upload will do.
     const SIM_EPS = 1e-6;
-    const visible = s.notes.filter((n) => n.t >= t0 && n.t <= t1).sort((a, b) => a.t - b.t);
-    const groups: Note[][] = [];
-    for (const n of visible) {
+    // Every instant a note is judged at: each note's head, plus a hold's (or a slide's
+    // hold-ending) release — a tap landing on a hold's release is just as simultaneous as
+    // two taps, and the server groups them the same way.
+    const instants: { t: number; lane: number }[] = [];
+    for (const n of s.notes) {
+      if (n.t >= t0 && n.t <= t1) instants.push({ t: n.t, lane: n.lane });
+      if (n.dur > 0) {
+        const tail = n.t + n.dur;
+        if (tail >= t0 && tail <= t1) instants.push({ t: tail, lane: n.lane });
+      }
+    }
+    instants.sort((a, b) => a.t - b.t);
+    const groups: { t: number; lane: number }[][] = [];
+    for (const n of instants) {
       const last = groups[groups.length - 1];
       // Anchored to the group's FIRST member (same anchor ew's own clustering uses), not
       // the previous note, so a long near-drifting run can't chain past the epsilon.
@@ -584,7 +595,7 @@ export class Renderer {
     ctx.lineWidth = 2;
     for (const group of groups) {
       if (group.length < 2) continue;
-      const pts = group.map((n) => this.notePoint(n.t, n.lane, s));
+      const pts = group.map((i) => this.notePoint(i.t, i.lane, s));
       ctx.beginPath();
       if (s.orientation === "vertical") {
         ctx.moveTo(Math.min(...pts.map((p) => p.x)), pts[0].y);

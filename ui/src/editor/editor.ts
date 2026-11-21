@@ -14,6 +14,7 @@ import { NotePreviewRenderer } from "./preview.js";
 import { openMetadataDialog } from "../views/metadata.js";
 import { openUploadDialog } from "../views/upload.js";
 import { CONVERTERS, importChart } from "../convert/index.js";
+import { getCurrentWindow } from "../tauri.js";
 
 export interface EditorView {
   root: HTMLElement;
@@ -102,6 +103,29 @@ function loadPreviewSizeScale(): number {
   return 1;
 }
 
+// Percentage settings for the note preview's spawn size and landing ripple — app-wide, like
+// the display size above. `key` stores the integer percent; a missing or out-of-range value
+// falls back to `def`.
+interface PctSetting {
+  key: string;
+  min: number;
+  max: number;
+  def: number;
+}
+/** Size a normal note or a hold's head spawns at, % of full size. */
+const SPAWN_HEAD_PCT: PctSetting = { key: "charter.previewSpawnHeadPct", min: 0, max: 100, def: 0 };
+/** Size a hold's tail (release marker) spawns at, % of full size. */
+const SPAWN_TAIL_PCT: PctSetting = { key: "charter.previewSpawnTailPct", min: 0, max: 100, def: 0 };
+/** Landing ripple size, % of its default (0 = off). */
+const RIPPLE_PCT: PctSetting = { key: "charter.previewRipplePct", min: 0, max: 300, def: 100 };
+
+function loadPct(c: PctSetting): number {
+  const stored = localStorage.getItem(c.key);
+  if (stored === null) return c.def;
+  const raw = Number(stored);
+  return Number.isFinite(raw) && raw >= c.min && raw <= c.max ? raw : c.def;
+}
+
 // Playback sound settings (note ticks, tick sound, volume) — app-wide preferences, not
 // per-project state, so they live in localStorage like the preview settings above rather
 // than in editorMeta.
@@ -129,6 +153,21 @@ function loadVolumePct(): number {
 // not per-project state. Null (never saved, or a stored value too small to be real) means
 // "use the CSS default" rather than forcing a specific width on a first-ever launch.
 const PREVIEW_WIDTH_KEY = "charter.previewWidthPx";
+
+// How the full-screen preview covers the screen. App-wide.
+//  - "os": the OS window itself goes full screen (the default).
+//  - "overlay": nothing but the preview overlay filling the app window as it is — for
+//    machines where the mouse pointer's image freezes in OS full screen.
+type PreviewFullscreenMode = "os" | "overlay";
+const PREVIEW_FS_MODE_KEY = "charter.previewFullscreenMode";
+// Written by an earlier build as an on/off switch for OS full screen.
+const PREVIEW_OS_FULLSCREEN_LEGACY_KEY = "charter.previewOsFullscreen";
+
+function loadPreviewFullscreenMode(): PreviewFullscreenMode {
+  const raw = localStorage.getItem(PREVIEW_FS_MODE_KEY);
+  if (raw === "os" || raw === "overlay") return raw;
+  return localStorage.getItem(PREVIEW_OS_FULLSCREEN_LEGACY_KEY) === "0" ? "overlay" : "os";
+}
 
 function loadPreviewWidthPx(): number | null {
   const raw = Number(localStorage.getItem(PREVIEW_WIDTH_KEY));
@@ -236,11 +275,15 @@ export async function createEditor(
   // so they carry over between songs like a player's own in-game settings would.
   let previewApproachSec = loadPreviewApproachSec();
   let previewSizeScale = loadPreviewSizeScale();
+  let spawnHeadPct = loadPct(SPAWN_HEAD_PCT);
+  let spawnTailPct = loadPct(SPAWN_TAIL_PCT);
+  let ripplePct = loadPct(RIPPLE_PCT);
   let previewHoverLane: number | null = null;
   // Keyboard lane keys for live tap/hold entry — app-wide setting (not per-project).
   let laneKeys = loadLaneKeys();
   let liveTapOffsetSec = loadLiveTapOffsetSec();
   let liveHoldThresholdSec = loadLiveHoldThresholdSec();
+  let previewFullscreenMode = loadPreviewFullscreenMode();
   // One entry per lane currently held down via a lane key, from keydown until its keyup —
   // the doc is captured at keydown so a difficulty switch mid-press can't corrupt the undo
   // transaction of the other difficulty.
@@ -833,6 +876,17 @@ export async function createEditor(
     },
   });
 
+  // The playback controls — full-screen preview borrows the first seven (everything up to
+  // and including the time display) for its header, then hands them back in this order.
+  const volumeLabel = el("span", { class: "mini-label", text: "🔊" });
+  const playControls = [playBtn, rateSelect, tickBtn, tickSoundSelect, volumeLabel, volumeInput, timeDisplay];
+  const playGroup = el(
+    "div",
+    { class: "group" },
+    ...playControls,
+    el("button", { class: "btn", text: "Jump…", title: "Jump to measure (Ctrl+G)", onclick: () => openJumpDialog() }),
+  );
+
   const toolbar = el(
     "div",
     { class: "editor-toolbar" },
@@ -888,18 +942,7 @@ export async function createEditor(
       }),
     ),
     el("div", { class: "row-break" }),
-    el(
-      "div",
-      { class: "group" },
-      playBtn,
-      rateSelect,
-      tickBtn,
-      tickSoundSelect,
-      el("span", { class: "mini-label", text: "🔊" }),
-      volumeInput,
-      timeDisplay,
-      el("button", { class: "btn", text: "Jump…", title: "Jump to measure (Ctrl+G)", onclick: () => openJumpDialog() }),
-    ),
+    playGroup,
     el(
       "div",
       { class: "group" },
@@ -1150,6 +1193,48 @@ export async function createEditor(
     },
   });
 
+  /** A slider + number box pair for one percentage setting, kept in sync with each other,
+   *  clamped to its range, and saved on every change. */
+  function pctControl(c: PctSetting, current: () => number, apply: (pct: number) => void, label: string): HTMLElement {
+    const attrs = { min: String(c.min), max: String(c.max), step: "1" };
+    const set = (raw: number): void => {
+      const v = Math.min(c.max, Math.max(c.min, Math.round(Number.isFinite(raw) ? raw : c.def)));
+      apply(v);
+      localStorage.setItem(c.key, String(v));
+      slider.value = String(v);
+      box.value = String(v);
+      requestDraw();
+    };
+    const slider = el("input", { type: "range", ...attrs, value: String(current()), oninput: () => set(Number(slider.value)) });
+    const box = el("input", { type: "number", ...attrs, value: String(current()), oninput: () => set(Number(box.value)) });
+    return el(
+      "div",
+      { class: "row preview-speed-row" },
+      el("span", { class: "mini-label", text: label }),
+      slider,
+      box,
+      el("span", { class: "mini-label", text: "%" }),
+    );
+  }
+  const spawnHeadControl = pctControl(SPAWN_HEAD_PCT, () => spawnHeadPct, (v) => (spawnHeadPct = v), "Spawn size — note / hold head");
+  const spawnTailControl = pctControl(SPAWN_TAIL_PCT, () => spawnTailPct, (v) => (spawnTailPct = v), "Spawn size — hold tail");
+  const rippleControl = pctControl(RIPPLE_PCT, () => ripplePct, (v) => (ripplePct = v), "Landing ripple size (0 = off)");
+
+  const previewFullscreenModeSelect = el(
+    "select",
+    {
+      title: "How the full-screen preview covers the screen",
+      onchange: () => {
+        const v = previewFullscreenModeSelect.value;
+        previewFullscreenMode = v === "overlay" ? "overlay" : "os";
+        localStorage.setItem(PREVIEW_FS_MODE_KEY, previewFullscreenMode);
+      },
+    },
+    el("option", { value: "os", text: "OS full screen" }),
+    el("option", { value: "overlay", text: "Inside the app window" }),
+  );
+  previewFullscreenModeSelect.value = previewFullscreenMode;
+
   function openAppSettingsDialog(): void {
     openDialog(
       "Settings",
@@ -1191,6 +1276,20 @@ export async function createEditor(
         text: "How long a lane key must be held down, while playing, before releasing it places a hold instead of a tap.",
       }),
       el("hr", { class: "dialog-sep" }),
+      el(
+        "div",
+        { class: "row lane-keys-row" },
+        el("span", { class: "mini-label", text: "Full-screen preview" }),
+        previewFullscreenModeSelect,
+      ),
+      el("p", {
+        class: "dialog-body",
+        text:
+          "OS full screen is the default. On some machines the mouse pointer's image freezes for a few " +
+          "seconds in it (not while a screen recorder is capturing the window) — if that bothers you, " +
+          "pick Inside the app window.",
+      }),
+      el("hr", { class: "dialog-sep" }),
       el("p", {
         class: "dialog-body",
         text: "Note preview — game speed 1-10, or seconds directly, for how long a note takes from spawn to the judgment line.",
@@ -1214,10 +1313,125 @@ export async function createEditor(
         previewSizeInput,
         el("span", { class: "mini-label", text: "%" }),
       ),
+      spawnHeadControl,
+      spawnTailControl,
+      rippleControl,
     );
   }
 
-  const previewPanel = el("div", { class: "preview-panel" }, previewWrap);
+  // --- full-screen preview ----------------------------------------------------
+  // An overlay that takes over the whole window (and the OS window itself, when allowed):
+  // previewWrap — canvas and all — is reparented into it, and the playback controls are
+  // borrowed from the toolbar into its header, so both keep working exactly as they do
+  // inline. Everything is handed back on exit.
+  let fsActive = false;
+  let fsUsedHtmlFullscreen = false;
+  let fsUsedWindowFullscreen = false;
+  let fsJacketUrl: string | null = null;
+  const fsBg = el("div", { class: "preview-fs-bg" });
+  const fsControls = el("div", { class: "preview-fs-controls" });
+  const fsStrip = el("div", { class: "preview-fs-strip" });
+  const fsExitBtn = el("button", {
+    class: "btn preview-fs-exit",
+    text: "✕",
+    title: "Exit full screen (Esc)",
+    onclick: () => void exitPreviewFullscreen(),
+  });
+  const fsHeader = el("div", { class: "preview-fs-header" }, fsControls, fsStrip, fsExitBtn);
+  const fsRoot = el("div", { class: "preview-fs" }, fsBg, fsHeader);
+  const fsBtn = el("button", {
+    class: "btn preview-fs-btn",
+    text: "⛶",
+    title: "Full-screen preview",
+    onclick: () => void enterPreviewFullscreen(),
+  });
+
+  /** Positions the header over the renderer's idea of where it goes, and tells the renderer
+   *  where the header's middle section landed so it can draw the density strip there. */
+  function layoutPreviewFullscreen(): void {
+    if (!fsActive) return;
+    const r = previewRenderer.fullscreenHeaderRect();
+    fsHeader.style.left = `${r.x}px`;
+    fsHeader.style.top = `${r.y}px`;
+    fsHeader.style.width = `${r.w}px`;
+    fsHeader.style.height = `${r.h}px`;
+    const cr = previewCanvas.getBoundingClientRect();
+    const sr = fsStrip.getBoundingClientRect();
+    previewRenderer.setFullscreenStrip({
+      x0: sr.left - cr.left,
+      x1: sr.right - cr.left,
+      top: sr.top - cr.top,
+      bottom: sr.bottom - cr.top,
+    });
+  }
+
+  function releaseFsJacket(): void {
+    if (fsJacketUrl) URL.revokeObjectURL(fsJacketUrl);
+    fsJacketUrl = null;
+  }
+
+  async function enterPreviewFullscreen(): Promise<void> {
+    if (fsActive) return;
+    fsActive = true;
+    // Fetched fresh each time so a jacket changed in Song settings shows up.
+    const bytes = await api.projectGetJacket(data.id).catch(() => null);
+    releaseFsJacket();
+    if (bytes) fsJacketUrl = URL.createObjectURL(new Blob([bytes]));
+    fsBg.style.backgroundImage = fsJacketUrl ? `url("${fsJacketUrl}")` : "none";
+    fsControls.append(...playControls);
+    fsRoot.insertBefore(previewWrap, fsHeader);
+    document.body.append(fsRoot);
+    previewRenderer.setFullscreen(true);
+    previewHoverLane = null;
+    if (previewFullscreenMode === "os") {
+      try {
+        await getCurrentWindow().setFullscreen(true);
+        fsUsedWindowFullscreen = true;
+      } catch {
+        // The native window API isn't available/permitted — fall back to the web one, and
+        // failing that the overlay still fills the window, just not the whole screen.
+        try {
+          await fsRoot.requestFullscreen();
+          fsUsedHtmlFullscreen = true;
+        } catch {
+          // stay windowed
+        }
+      }
+    }
+    previewRenderer.resize();
+    layoutPreviewFullscreen();
+    requestDraw();
+  }
+
+  async function exitPreviewFullscreen(): Promise<void> {
+    if (!fsActive) return;
+    fsActive = false;
+    previewRenderer.setFullscreen(false);
+    previewSeeking = false;
+    previewSongHoverPos = null;
+    playGroup.prepend(...playControls);
+    previewPanel.insertBefore(previewWrap, previewPanel.firstChild);
+    fsRoot.remove();
+    releaseFsJacket();
+    previewRenderer.resize();
+    requestDraw();
+    if (fsUsedHtmlFullscreen) {
+      fsUsedHtmlFullscreen = false;
+      if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+    } else if (fsUsedWindowFullscreen) {
+      fsUsedWindowFullscreen = false;
+      await getCurrentWindow().setFullscreen(false).catch(() => {});
+    }
+  }
+
+  // Leaving web-API full screen by its own means (Esc is eaten by the browser before our
+  // key handler sees it) has to close the overlay too.
+  function onFullscreenChange(): void {
+    if (fsActive && fsUsedHtmlFullscreen && !document.fullscreenElement) void exitPreviewFullscreen();
+  }
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+
+  const previewPanel = el("div", { class: "preview-panel" }, previewWrap, fsBtn);
   const previewResizer = el("div", { class: "preview-resizer", title: "Drag to resize the preview" });
 
   previewResizer.addEventListener("pointerdown", (e) => {
@@ -1384,6 +1598,7 @@ export async function createEditor(
       ["Click waveform", "Seek"],
       ["Snap to grid button", "Pull near-grid notes/lengths exactly onto the grid"],
       ["Click/drag song density strip (preview)", "Seek — shows a time/measure tooltip"],
+      ["⛶ button (preview, top right) / F11", "Full-screen preview, laid out like the in-game screen — F11, Esc or ✕ to exit"],
       ["A S D F G H J K L", "Place a tap at the playhead, in lanes 9→1 left to right — works during playback; hold the key while playing to place a hold instead. Keys, input offset, and hold threshold all configurable in ⚙ Settings"],
     ];
     openDialog(
@@ -2285,6 +2500,16 @@ export async function createEditor(
     ) {
       return;
     }
+    if (e.key === "F11") {
+      e.preventDefault();
+      void (fsActive ? exitPreviewFullscreen() : enterPreviewFullscreen());
+      return;
+    }
+    if (fsActive && e.key === "Escape") {
+      e.preventDefault();
+      void exitPreviewFullscreen();
+      return;
+    }
     const d = doc();
     const ctrl = e.ctrlKey || e.metaKey;
     const shift = e.shiftKey;
@@ -2525,6 +2750,7 @@ export async function createEditor(
     }
     // The preview animates continuously against the playhead, independent of the main
     // canvas's needsDraw gating.
+    layoutPreviewFullscreen();
     const measureInfo = currentMeasureInfo();
     const songInfo = songMeasureInfo();
     previewRenderer.draw({
@@ -2540,6 +2766,9 @@ export async function createEditor(
       songHoverPos: previewSongHoverPos,
       songHoverLabel: previewSongHoverPos !== null ? formatSongPosition(previewSongHoverPos) : null,
       hoverLane: previewHoverLane,
+      spawnScaleHead: spawnHeadPct / 100,
+      spawnScaleTail: spawnTailPct / 100,
+      rippleScale: ripplePct / 100,
     });
     requestAnimationFrame(frame);
   }
@@ -2549,7 +2778,10 @@ export async function createEditor(
     requestDraw();
   });
   resizeObserver.observe(canvasWrap);
-  const previewResizeObserver = new ResizeObserver(() => previewRenderer.resize());
+  const previewResizeObserver = new ResizeObserver(() => {
+    previewRenderer.resize();
+    layoutPreviewFullscreen();
+  });
   previewResizeObserver.observe(previewWrap);
 
   player.onstate = () => {
@@ -2600,6 +2832,8 @@ export async function createEditor(
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      if (fsActive) await exitPreviewFullscreen();
       resizeObserver.disconnect();
       previewResizeObserver.disconnect();
       player.dispose();
