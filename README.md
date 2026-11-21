@@ -10,6 +10,14 @@ Re-uploading a project you already published offers **update in place**
 (`POST /custom_song/update`) — the song keeps its music id and players keep their
 scores; unchanged audio/jackets are not re-sent.
 
+## Credits
+
+Charter was created by [ethanaobrien](https://git.ethanthesleepy.one/ethanaobrien), who
+also wrote the [ew](https://git.ethanthesleepy.one/ethanaobrien/ew) server it works with.
+The original project lives at
+[ethanaobrien/charter](https://git.ethanthesleepy.one/ethanaobrien/charter); this
+repository carries additional changes on top of it.
+
 ## Layout
 
 - `src-tauri/` — Rust backend: ew server HTTP client (`server.rs`), local project
