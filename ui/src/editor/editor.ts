@@ -61,6 +61,14 @@ type Gesture =
   | { type: "scrub"; resume: boolean };
 
 const SNAPS = [1, 2, 3, 4, 6, 8, 12, 16];
+
+/** How far off a grid line a note may be and still count as "meant to be on it" — for Snap
+ *  to grid, the paste self-heal, and the move gesture's self-heal alike, so one note can't
+ *  be treated as on-grid by one and off-grid by another. Wide enough to cover the ~1ms
+ *  jitter notes carry over from charts made elsewhere (far past float noise, but nowhere
+ *  near audible or judgeable), narrow enough to stay well under half the gap to the
+ *  neighboring line even at 1/16 and 300 BPM (~6ms). */
+const GRID_SNAP_TOLERANCE_SEC = 2e-3;
 const RATES = [0.5, 0.75, 1];
 
 // In-game note speed (1-10) <-> seconds from spawn to judgment, for the note preview.
@@ -391,15 +399,15 @@ export async function createEditor(
   }
 
   /** The grid line — on ANY standard division, not just the currently-selected snap — that
-   *  `t` is closest to, if that's within float noise of it; null if `t` isn't close to any
-   *  of them. Different divisions' lines are generically tens of milliseconds apart at any
-   *  real-world BPM, four orders of magnitude above the tolerance here, so at most one
-   *  division can plausibly match for a given drifted note — there's no need to know which
-   *  division a note was originally placed on to recognize it's merely drifted off that
-   *  line. */
+   *  `t` is closest to, if that's within GRID_SNAP_TOLERANCE_SEC of it; null if `t` isn't
+   *  close to any of them. Different divisions' lines are at least ~4-5ms apart even at
+   *  300 BPM (1/16 vs 1/12 is the closest pair, 1/48 beat), more than twice the tolerance
+   *  here, so at most one division can plausibly match for a given drifted note — there's
+   *  no need to know which division a note was originally placed on to recognize it's
+   *  merely drifted off that line. */
   function nearestGridTime(tm: TempoMap, t: number): number | null {
     let best: number | null = null;
-    let bestDiff = 1e-4;
+    let bestDiff = GRID_SNAP_TOLERANCE_SEC;
     for (const div of SNAPS) {
       const candidate = snapWith(tm, t, div);
       const diff = Math.abs(candidate - t);
@@ -427,7 +435,7 @@ export async function createEditor(
 
   /** Snaps every note in the current difficulty onto the tempo grid, for charts that predate
    *  the slot-grid rework or were edited by a different build/tool: a note (or hold/slide
-   *  duration) that's merely within float noise of a grid line — not one deliberately placed
+   *  duration) that's within GRID_SNAP_TOLERANCE_SEC of a grid line — not one deliberately placed
    *  off-grid, which this leaves alone — gets pulled exactly onto it, the same self-heal the
    *  move gesture already does for a note you actually drag, just applied to everything at
    *  once without requiring a drag. Checks every standard division (nearestGridTime), not
@@ -875,7 +883,7 @@ export async function createEditor(
         class: "btn",
         text: "Snap to grid",
         title:
-          "Pull every note (and hold/slide length) that's merely within float noise of a grid line exactly onto it — checks every standard division (plain and triplet), not just the one currently selected — fixes charts from before the grid-precision fixes, or edited by another tool, where simultaneous notes drifted apart by a hair",
+          "Pull every note (and hold/slide length) that's within about 2ms of a grid line exactly onto it — checks every standard division (plain and triplet), not just the one currently selected — fixes charts from before the grid-precision fixes, or edited by another tool, where simultaneous notes drifted apart by a hair",
         onclick: () => snapAllToGrid(),
       }),
     ),
@@ -2057,7 +2065,7 @@ export async function createEditor(
               // notes merged from elsewhere) onto the new grid position, instead of just
               // preserving it via the raw-distance shift. `there` is a pure function of an
               // integer slot, so notes sharing one land bit-identical.
-              const onGrid = Math.abs(snapWith(tm, o.t) - o.t) < 1e-4;
+              const onGrid = Math.abs(snapWith(tm, o.t) - o.t) < GRID_SNAP_TOLERANCE_SEC;
               n.t = onGrid ? Math.max(0, there) : Math.max(0, o.t + (there - here));
             }
             if (hasGrid && kd !== 0 && (n.kind === "hold" || (n.kind === "slide" && n.dur > 0))) {
@@ -2070,7 +2078,7 @@ export async function createEditor(
               // Skipped when kd === 0 for the same reason position skips it: re-deriving an
               // unmoved note through the grid math can land an ulp off and read as a real edit.
               const origEnd = o.t + n.dur;
-              const onGridEnd = Math.abs(snapWith(tm, origEnd) - origEnd) < 1e-4;
+              const onGridEnd = Math.abs(snapWith(tm, origEnd) - origEnd) < GRID_SNAP_TOLERANCE_SEC;
               if (onGridEnd) {
                 const endSlot = tm.slotAt(origEnd, snap) + kd;
                 n.dur = Math.max(0, tm.slotTime(endSlot, snap) - n.t);
@@ -2358,15 +2366,28 @@ export async function createEditor(
           // the source note was itself on-grid), snap it exactly there so a note placed
           // afterward via a fresh click lines up bit for bit (exact f64 equality is what
           // the server's chord grouping relies on).
-          const raw = tm.timeAt(baseBeat + c.dBeat);
-          let t: number;
-          if (hasGrid) {
+          //
+          // A hold/slide tail is an instant of its own, so it goes through that same
+          // decision independently of its head: two raw times that are equal (a copied
+          // hold's tail and a tap that sat at the same instant) then always land equal,
+          // snapped together or left together. Snapping only the head and carrying the
+          // source duration over instead drags the tail off by however far the head moved,
+          // away from a tap that stayed put — breaking a simultaneity the source had.
+          const landOnGrid = (raw: number): number => {
+            if (!hasGrid) return Math.max(0, raw);
             const grid = snapTime(raw);
-            t = Math.abs(grid - raw) < 1e-4 ? grid : Math.max(0, raw);
-          } else {
-            t = Math.max(0, raw);
+            return Math.abs(grid - raw) < GRID_SNAP_TOLERANCE_SEC ? grid : Math.max(0, raw);
+          };
+          const rawT = tm.timeAt(baseBeat + c.dBeat);
+          const t = landOnGrid(rawT);
+          let dur = 0;
+          if (c.durBeat > 0) {
+            const rawTail = tm.timeAt(baseBeat + c.dBeat + c.durBeat);
+            let tail = landOnGrid(rawTail);
+            // a very short hold whose ends snap onto the same line keeps its raw length
+            if (tail <= t) tail = t + Math.max(0, rawTail - rawT);
+            dur = Math.max(0, tail - t);
           }
-          const dur = c.durBeat > 0 ? Math.max(0, tm.timeAt(tm.beatAt(t) + c.durBeat) - t) : 0;
           let lane = c.lane;
           if(shift) {
             lane = 10 - lane;
