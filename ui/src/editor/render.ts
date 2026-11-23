@@ -5,6 +5,9 @@ export type Orientation = "vertical" | "horizontal";
 
 export interface ViewState {
   orientation: Orientation;
+  /** Vertical layout only: time runs bottom to top (later is higher) instead of top to
+   *  bottom. `scroll` is still the time at the start edge — here the bottom edge. */
+  flip: boolean;
   /** Time at the start edge of the time axis, seconds. */
   scroll: number;
   /** Pixels per second along the time axis. */
@@ -140,6 +143,7 @@ export class Renderer {
 
   /** Time → canvas position along the time axis. */
   private tpx(t: number, s: ViewState): number {
+    if (s.orientation === "vertical" && s.flip) return this.h - (t - s.scroll) * s.zoom;
     return this.tOffset(s.orientation) + (t - s.scroll) * s.zoom;
   }
 
@@ -166,7 +170,10 @@ export class Renderer {
     const o = s.orientation;
     const timePos = o === "vertical" ? y : x;
     if (timePos < this.tOffset(o)) return null; // lane-label strip (horizontal mode)
-    const t = s.scroll + (timePos - this.tOffset(o)) / s.zoom;
+    const t =
+      o === "vertical" && s.flip
+        ? s.scroll + (this.h - timePos) / s.zoom
+        : s.scroll + (timePos - this.tOffset(o)) / s.zoom;
     const crossPos = (o === "vertical" ? x : y) - GUTTER;
     if (crossPos < 0) return { kind: "gutter", t };
     if (crossPos >= this.laneExtent(o)) return null;
@@ -411,8 +418,10 @@ export class Renderer {
       const mid = GUTTER * 0.55;
       const halfMax = GUTTER * 0.4;
       for (let p = 0; p < span; p++) {
-        const tA = s.scroll + p / s.zoom;
-        const tB = s.scroll + (p + 1) / s.zoom;
+        // the screen row p's time range — mirrored when time runs bottom to top
+        const q = o === "vertical" && s.flip ? span - p - 1 : p;
+        const tA = s.scroll + q / s.zoom;
+        const tB = s.scroll + (q + 1) / s.zoom;
         if (tB < 0 || tA > s.duration) continue;
         let amp = 0;
         const bA = Math.max(0, Math.floor(tA * s.peaksPerSec));

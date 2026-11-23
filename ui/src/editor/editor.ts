@@ -325,7 +325,16 @@ export async function createEditor(
   let tool: Tool = "tap";
   let scroll = -0.5;
   let zoom = editorMeta.zoom || 200;
-  let orientation: Orientation = editorMeta.orientation === "horizontal" ? "horizontal" : "vertical";
+  // The layout: vertical (time runs top to bottom), vertical-up (bottom to top), or
+  // horizontal. Saved per project in editorMeta.orientation.
+  type Layout = "vertical" | "vertical-up" | "horizontal";
+  let layout: Layout =
+    editorMeta.orientation === "horizontal" || editorMeta.orientation === "vertical-up"
+      ? editorMeta.orientation
+      : "vertical";
+  // The axis the renderer draws along, and which way time runs along it.
+  const orientationOf = (): Orientation => (layout === "horizontal" ? "horizontal" : "vertical");
+  const flipped = (): boolean => layout === "vertical-up";
   let snap = SNAPS.includes(editorMeta.snap) ? editorMeta.snap : 4;
   let gesture: Gesture = { type: "none" };
   let ghost: DrawState["ghost"] = null;
@@ -643,7 +652,7 @@ export async function createEditor(
     syncManifestLevels();
     editorMeta.snap = snap;
     editorMeta.zoom = zoom;
-    editorMeta.orientation = orientation;
+    editorMeta.orientation = layout;
     saveState = "saving";
     updateStatus();
     let ok = true;
@@ -930,17 +939,22 @@ export async function createEditor(
     },
   });
 
-  const orientBtn = el("button", {
-    class: "btn",
-    text: orientation === "vertical" ? "⇆ Horizontal" : "⇅ Vertical",
-    title: "Toggle editor orientation",
-    onclick: () => {
-      orientation = orientation === "vertical" ? "horizontal" : "vertical";
-      orientBtn.textContent = orientation === "vertical" ? "⇆ Horizontal" : "⇅ Vertical";
-      markDirty();
-      requestDraw();
+  const layoutSelect = el(
+    "select",
+    {
+      title: "Editor layout — which way time runs",
+      onchange: () => {
+        const v = layoutSelect.value;
+        layout = v === "horizontal" || v === "vertical-up" ? v : "vertical";
+        markDirty();
+        requestDraw();
+      },
     },
-  });
+    el("option", { value: "vertical", text: "⇅ Vertical ↓" }),
+    el("option", { value: "vertical-up", text: "⇅ Vertical ↑" }),
+    el("option", { value: "horizontal", text: "⇆ Horizontal →" }),
+  );
+  layoutSelect.value = layout;
 
   // Flick notes are opt-in: until this is on, the flick tool is disabled and nothing flips a
   // note or a release into a flick.
@@ -1056,7 +1070,7 @@ export async function createEditor(
       { class: "group" },
       el("button", { class: "btn tool-btn", text: "−", title: "Zoom out (Ctrl+wheel)", onclick: () => zoomBy(1 / 1.3) }),
       el("button", { class: "btn tool-btn", text: "+", title: "Zoom in (Ctrl+wheel)", onclick: () => zoomBy(1.3) }),
-      orientBtn,
+      layoutSelect,
     ),
     el(
       "div",
@@ -2249,7 +2263,8 @@ export async function createEditor(
     const tm = tempo();
     const slideTail = openSlideTail();
     return {
-      orientation,
+      orientation: orientationOf(),
+      flip: flipped(),
       scroll,
       zoom,
       bpm: bpm(),
@@ -2291,7 +2306,7 @@ export async function createEditor(
       gesture = {
         type: "pan",
         startScroll: scroll,
-        startPos: orientation === "vertical" ? y : x,
+        startPos: layout === "horizontal" ? x : y,
       };
       e.preventDefault();
       return;
@@ -2461,8 +2476,11 @@ export async function createEditor(
 
     switch (gesture.type) {
       case "pan": {
-        const pos = orientation === "vertical" ? y : x;
-        scroll = gesture.startScroll - (pos - gesture.startPos) / zoom;
+        const pos = layout === "horizontal" ? x : y;
+        // Dragging the content toward the start edge reveals later times — which way that
+        // is on screen depends on which way time runs.
+        const dir = layout === "vertical-up" ? 1 : -1;
+        scroll = gesture.startScroll + (dir * (pos - gesture.startPos)) / zoom;
         clampScroll();
         requestDraw();
         return;
@@ -2701,7 +2719,9 @@ export async function createEditor(
         zoomBy(Math.exp(-e.deltaY * 0.0016), anchor);
       } else {
         const delta = (e.deltaY !== 0 ? e.deltaY : e.deltaX) / zoom;
-        scroll += delta;
+        // The wheel scrolls the way the content moves: with time running bottom to top,
+        // rolling up goes later, like rolling down does when time runs top to bottom.
+        scroll += flipped() ? -delta : delta;
         clampScroll();
         requestDraw();
       }
