@@ -35,6 +35,11 @@ fn main() {
     // the underlying gap is real regardless, so the mitigation stays: cap the cache
     // sizes near zero (there's no official "disable" switch) since this is a local IPC
     // channel and a handful of small asset files, nothing that benefits from caching.
+    // Also `--disable-direct-composition`: on some Windows 11 machines (AMD GPUs seen) the
+    // mouse pointer's drawn image freezes for seconds in OS full screen while the real
+    // pointer keeps working, which looks like Chromium's DirectComposition/multiplane-overlay
+    // presentation (it never happens while a screen recorder is capturing the window).
+    // Chromium apps report the flag stops it, and it did here too (WebView2, Windows 11).
     // Must be set before the WebView2 environment is created, i.e. before .run() below.
     #[cfg(target_os = "windows")]
     {
@@ -42,7 +47,7 @@ fn main() {
         unsafe {
             std::env::set_var(
                 "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                "--disk-cache-size=1 --media-cache-size=1",
+                "--disk-cache-size=1 --media-cache-size=1 --disable-direct-composition",
             );
         }
     }
