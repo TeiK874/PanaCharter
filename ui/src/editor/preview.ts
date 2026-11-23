@@ -40,6 +40,8 @@ export interface PreviewState {
   spawnScaleTail: number;
   /** Landing-ripple size multiplier (1 = the default size, 0 = no ripple). */
   rippleScale: number;
+  /** Fill notes with their bright color (true), or draw them as outlines in it (false). */
+  fillNotes: boolean;
 }
 
 const LANES = 9;
@@ -80,7 +82,6 @@ const JUDGE_RADIUS_MAX_SCALE = 1.25;
 
 const COLORS = {
   bg: "#101018",
-  guide: "#26263a",
   judge: "#20202f",
   judgeRim: "#4a4a6e",
   tap: "#ff8fb0",
@@ -90,11 +91,11 @@ const COLORS = {
   holdBody: "rgba(111, 217, 139, 0.35)",
   star: "#ffcf5e",
   starRim: "#c69a2e",
-  slide: "#b48cff",
-  slideRim: "#7c56c9",
-  slideBody: "rgba(180, 140, 255, 0.35)",
-  flick: "#4ea8ff",
-  flickRim: "#2b6fb8",
+  slide: "#4ea8ff",
+  slideRim: "#2b6fb8",
+  slideBody: "rgba(78, 168, 255, 0.35)",
+  flick: "#b48cff",
+  flickRim: "#7c56c9",
   label: "#77748f",
   labelStrong: "#eceaf4",
   density: "#62b1ff",
@@ -255,7 +256,7 @@ export class NotePreviewRenderer {
     const statsTop = Math.min(topRegionBottom, spawn.y + fanRadius * (1 + k));
     // Sits just above the spawn point — where notes actually emerge from — rather than
     // at a fixed distance from the panel's edge, so it tracks the fan as its size changes.
-    return { spawn, fanRadius, statsTop, comboY: spawn.y - 8 };
+    return { spawn, fanRadius, statsTop, comboY: spawn.y - (FS_SPAWN_RING_R * fanRadius) / FS_FAN_RADIUS - 5 };
   }
 
   /** How the area below the fan (from statsTop down) splits into rows — the measure/beat
@@ -335,15 +336,6 @@ export class NotePreviewRenderer {
     const judgePositions: Point[] = [];
     for (let lane = 1; lane <= LANES; lane++) judgePositions.push(this.judgePos(spawn, fanRadius, lane));
 
-    ctx.strokeStyle = COLORS.guide;
-    ctx.lineWidth = 1;
-    for (const p of judgePositions) {
-      ctx.beginPath();
-      ctx.moveTo(spawn.x, spawn.y);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-    }
-
     for (const p of judgePositions) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, judgeRadius, 0, Math.PI * 2);
@@ -354,18 +346,16 @@ export class NotePreviewRenderer {
       ctx.stroke();
     }
 
-    if (this.fullscreen) {
-      ctx.beginPath();
-      ctx.arc(spawn.x, spawn.y, FS_SPAWN_RING_R * stageScale, 0, Math.PI * 2);
-      ctx.fillStyle = COLORS.spawnFs;
-      ctx.fill();
-      ctx.strokeStyle = COLORS.spawnFsRim;
-      ctx.lineWidth = Math.max(1.5, 4 * stageScale);
-      ctx.stroke();
-    } else {
-      ctx.fillStyle = COLORS.judgeRim;
-      ctx.fillRect(spawn.x - 0.5, spawn.y - 0.5, 1, 1);
-    }
+    // The pink ring around the spawn point, sized off the fan radius (same proportion the
+    // reference screenshot has) so it reads the same in the small panel as full screen.
+    const ringScale = fanRadius / FS_FAN_RADIUS;
+    ctx.beginPath();
+    ctx.arc(spawn.x, spawn.y, FS_SPAWN_RING_R * ringScale, 0, Math.PI * 2);
+    ctx.fillStyle = COLORS.spawnFs;
+    ctx.fill();
+    ctx.strokeStyle = COLORS.spawnFsRim;
+    ctx.lineWidth = Math.max(1.5, 4 * ringScale);
+    ctx.stroke();
 
     // Slide chains: the direction each note's arrow points — toward the next member, or
     // for a chain's last member (no next), the same direction as the one before it, so
@@ -449,6 +439,10 @@ export class NotePreviewRenderer {
       // turn flick-blue instead.
       const [tailFill, tailRim] = n.flickEnd ? [COLORS.flick, COLORS.flickRim] : [fill, rim];
       const [headFill, headRim] = n.dur === 0 && n.flickEnd ? [COLORS.flick, COLORS.flickRim] : [fill, rim];
+      // Filled notes are the bright color with a darker rim, marks drawn in the rim color;
+      // unfilled ones are just a ring in the bright color, marks in it too.
+      const headInk = s.fillNotes ? headRim : headFill;
+      const tailInk = s.fillNotes ? tailRim : tailFill;
 
       if (n.dur > 0) {
         const tailUntil = n.t + n.dur - s.now;
@@ -482,17 +476,19 @@ export class NotePreviewRenderer {
         // Tail marker (the release point).
         ctx.beginPath();
         ctx.arc(tailPos.x, tailPos.y, tailRadius, 0, Math.PI * 2);
-        ctx.fillStyle = tailFill;
-        ctx.fill();
-        ctx.lineWidth = Math.max(1, tailRadius * 0.18);
-        ctx.strokeStyle = tailRim;
+        if (s.fillNotes) {
+          ctx.fillStyle = tailFill;
+          ctx.fill();
+        }
+        ctx.lineWidth = Math.max(1, tailRadius * (s.fillNotes ? 0.18 : 0.2));
+        ctx.strokeStyle = tailInk;
         ctx.stroke();
 
         if (simTails.has(n.id)) {
           ctx.beginPath();
           ctx.moveTo(tailPos.x - tailRadius * 0.6, tailPos.y);
           ctx.lineTo(tailPos.x + tailRadius * 0.6, tailPos.y);
-          ctx.strokeStyle = tailRim;
+          ctx.strokeStyle = tailInk;
           ctx.lineWidth = Math.max(1.5, tailRadius * 0.4);
           ctx.lineCap = "round";
           ctx.stroke();
@@ -501,11 +497,33 @@ export class NotePreviewRenderer {
 
       ctx.beginPath();
       ctx.arc(headPos.x, headPos.y, headRadius, 0, Math.PI * 2);
-      ctx.fillStyle = headFill;
-      ctx.fill();
-      ctx.lineWidth = Math.max(1, headRadius * 0.18);
-      ctx.strokeStyle = headRim;
+      if (s.fillNotes) {
+        ctx.fillStyle = headFill;
+        ctx.fill();
+      }
+      ctx.lineWidth = Math.max(1, headRadius * (s.fillNotes ? 0.18 : 0.2));
+      ctx.strokeStyle = headInk;
       ctx.stroke();
+
+      // A star note carries a star outline in its middle.
+      if (n.kind === "star") {
+        const outer = headRadius * 0.56;
+        const inner = outer * 0.42;
+        ctx.beginPath();
+        for (let i = 0; i < 10; i++) {
+          const a = -Math.PI / 2 + (i * Math.PI) / 5;
+          const r = i % 2 === 0 ? outer : inner;
+          const x = headPos.x + r * Math.cos(a);
+          const y = headPos.y + r * Math.sin(a);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.strokeStyle = headInk;
+        ctx.lineWidth = Math.max(1.2, headRadius * 0.12);
+        ctx.lineJoin = "round";
+        ctx.stroke();
+      }
 
       // Slide direction arrow, overlaid on top of the note's circle.
       const angle = n.kind === "slide" ? slideDirection.get(n.id) : undefined;
@@ -519,7 +537,7 @@ export class NotePreviewRenderer {
         ctx.moveTo(-headRadius * 0.4, -headRadius * 0.55);
         ctx.lineTo(headRadius * 0.35, 0);
         ctx.lineTo(-headRadius * 0.4, headRadius * 0.55);
-        ctx.strokeStyle = rim;
+        ctx.strokeStyle = headInk;
         ctx.lineWidth = Math.max(1.5, headRadius * 0.4);
         ctx.stroke();
         ctx.restore();
@@ -530,7 +548,7 @@ export class NotePreviewRenderer {
         ctx.beginPath();
         ctx.moveTo(headPos.x - headRadius * 0.6, headPos.y);
         ctx.lineTo(headPos.x + headRadius * 0.6, headPos.y);
-        ctx.strokeStyle = rim;
+        ctx.strokeStyle = headInk;
         ctx.lineWidth = Math.max(1.5, headRadius * 0.4);
         ctx.lineCap = "round";
         ctx.stroke();

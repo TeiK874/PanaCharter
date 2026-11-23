@@ -89,13 +89,13 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 
 | Input | Action |
 |---|---|
-| `1`–`6` | Select / Tap / Hold / Star / Slide / Flick tool |
+| `1`–`6` | Select / Tap / Hold / Star / Slide / Flick tool — the Flick tool, and everything else that makes a flick, is off until you tick the checkbox right of its toolbar button (an app-wide setting, off by default) |
 | Click | Place note (drag to set a hold's length) |
 | Slide: click, click, … | Chain points across lanes · drag the last point to end it in a hold |
 | `Esc` (Slide tool) | End the current slide chain |
 | Drag note | Move it · drag a hold's **tail** to resize |
-| Click an already-selected tap/star note | Flip it — and every other selected tap/star note — to the other kind (no drag) |
-| Click an already-selected hold, or a selected slide's tail (tool ≠ Slide) | Toggle its release between normal and flick — and every other selected one along with it (no drag) |
+| Click an already-selected tap/star note | Flip it — and every other selected tap/star note — to the other kind (no drag); with flicks on it cycles tap → star → flick → tap |
+| Click an already-selected hold, or a selected slide's tail (tool ≠ Slide), with flicks on | Toggle its release between normal and flick — and every other selected one along with it (no drag) |
 | Right-click | Delete note |
 | Shift+click | Add to / remove from selection |
 | Drag on empty space (select tool) | Box select |
@@ -113,11 +113,12 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | `A` `S` `D` `F` `G` `H` `J` `K` `L` | Place a tap at the playhead, in lanes 9→1 left to right — works during playback too. Hold the key down while playing to place a hold instead of a tap. In ⚙ Settings: click a lane's key box then press any key to rebind it (auto-advances to the next box); how much earlier than the keypress the note lands (input-lag compensation) and how long a hold-down counts as a hold are also adjustable there — all app-wide settings saved across projects |
 | ⇆ toolbar button | Toggle vertical-scroll ⇄ horizontal-timeline layout |
 | Snap to grid toolbar button | Pull every note (and hold/slide length) that's within about 2ms of a grid line exactly onto it — checks every standard division (plain and triplet), not just the currently-selected one |
+| Checkbox right of Snap to grid | When ticked, dragging notes lands the earliest selected note exactly on the grid even if it started off it, the rest of the selection keeping its positions relative to it (off by default; an app-wide setting) |
 | 🔔 toolbar button | Toggle note ticks during playback |
 | 🔔 tick-sound dropdown | Switch the playback tick between a synthesized beep and a sample SE (web audio backend only) |
 | 🔊 toolbar slider | Adjust audio playback volume |
 | Tick on/off, tick sound, and volume | App-wide settings, saved across projects |
 | Tempo… toolbar button | Add/edit mid-song BPM and time-signature changes — the grid, measure lines/numbering, and snapping follow each change from its time onward |
-| Note preview (left panel) | In-game-style preview: notes fly from a top-center spawn point out to a fan of 9 judgment circles, growing as they approach, with a live combo counter above it. Below: a 4-measure density close-up, then a whole-song per-measure density strip — click or drag it to seek, with a "m:ss · Measure N" tooltip, and it auto-scrolls the main view to match. The ⛶ button at its top right (or `F11`) opens a full-screen preview laid out like the in-game screen (1920x1080 reference, scaled to fit), with the jacket dimmed behind it and a header holding the playback controls, the song density/seek strip, and an exit button (`F11` or `Esc` also exits) — lane keys and playback shortcuts keep working there. Drag the panel's right edge to resize; display size (50–125%), speed (game speed 1–10, or seconds directly), the size notes spawn at (normal notes/hold heads and hold tails separately) and the landing-ripple size, and panel width are all app-wide settings, saved across projects |
+| Note preview (left panel) | In-game-style preview: notes fly from a top-center spawn point out to a fan of 9 judgment circles, growing as they approach (drawn as outlines by default; filling them is a setting), with a live combo counter above it. Below: a 4-measure density close-up, then a whole-song per-measure density strip — click or drag it to seek, with a "m:ss · Measure N" tooltip, and it auto-scrolls the main view to match. The ⛶ button at its top right (or `F11`) opens a full-screen preview laid out like the in-game screen (1920x1080 reference, scaled to fit), with the jacket dimmed behind it and a header holding the playback controls, the song density/seek strip, and an exit button (`F11` or `Esc` also exits) — lane keys and playback shortcuts keep working there. Drag the panel's right edge to resize; display size (50–125%), speed (game speed 1–10, or seconds directly), the size notes spawn at (normal notes/hold heads and hold tails separately) and the landing-ripple size, and panel width are all app-wide settings, saved across projects |
 
 Everything autosaves; press **？** in the toolbar for this list in-app.

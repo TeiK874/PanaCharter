@@ -343,6 +343,8 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
 .preview-canvas-wrap { flex: 1; position: relative; min-height: 0; }
 .preview-canvas-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
+.flick-use { display: inline-flex; align-items: center; cursor: pointer; }
+.flick-use input { margin: 0 2px 0 -2px; cursor: pointer; }
 .preview-fs-btn {
   position: absolute; top: 4px; right: 4px; z-index: 2;
   padding: 2px 7px; line-height: 1.2; opacity: 0.75;

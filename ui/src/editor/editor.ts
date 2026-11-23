@@ -34,6 +34,13 @@ type Gesture =
       /** True if this note was already the open chain tail when the click started — a
        *  plain click (no drag) then toggles it back to select mode instead of reopening it. */
       wasActive: boolean;
+      /** Where the pointer went down (canvas px), and whether it has since travelled far enough
+       *  to count as a drag rather than a click. A click on the already-open tail must leave
+       *  it exactly as it was (closing the chain); without this slop, the click's own jitter
+       *  could put the pointer in the next grid slot and turn the tail into a one-step hold. */
+      downX: number;
+      downY: number;
+      dragged: boolean;
     }
   | {
       type: "move";
@@ -56,12 +63,25 @@ type Gesture =
        *  back to the exact start still counts as a real drag, not a plain click, and
        *  doesn't trigger slideTogglePending/kindTogglePending. */
       moved: boolean;
+      /** The earliest selected note — what "snap moves to grid" lands on the grid, with the
+       *  rest of the selection keeping its position relative to it. */
+      leadId: number;
+      /** Where the pointer went down (canvas px) and whether it has travelled past the click
+       *  slop since. Only consulted when snap-moves-to-grid is about to move an off-grid lead:
+       *  a plain click's jitter must not pull the note onto the grid (it would read as a drag
+       *  and break click-to-flip-kind). */
+      downX: number;
+      downY: number;
+      slopPassed: boolean;
     }
   | { type: "box"; x0: number; y0: number; x1: number; y1: number; additive: boolean }
   | { type: "pan"; startScroll: number; startPos: number }
   | { type: "scrub"; resume: boolean };
 
 const SNAPS = [1, 2, 3, 4, 6, 8, 12, 16];
+
+/** How far (canvas px) the pointer must travel from where it went down before it counts as a drag. */
+const CLICK_SLOP_PX = 5;
 
 /** How far off a grid line a note may be and still count as "meant to be on it" — for Snap
  *  to grid, the paste self-heal, and the move gesture's self-heal alike, so one note can't
@@ -117,7 +137,33 @@ const SPAWN_HEAD_PCT: PctSetting = { key: "charter.previewSpawnHeadPct", min: 0,
 /** Size a hold's tail (release marker) spawns at, % of full size. */
 const SPAWN_TAIL_PCT: PctSetting = { key: "charter.previewSpawnTailPct", min: 0, max: 100, def: 0 };
 /** Landing ripple size, % of its default (0 = off). */
-const RIPPLE_PCT: PctSetting = { key: "charter.previewRipplePct", min: 0, max: 300, def: 100 };
+const RIPPLE_PCT: PctSetting = { key: "charter.previewRipplePct", min: 0, max: 100, def: 100 };
+
+// Fill notes in the preview with their bright color, or draw them as outlines in it. Off by
+// default. App-wide.
+const PREVIEW_FILL_KEY = "charter.previewFillNotes";
+
+function loadPreviewFillNotes(): boolean {
+  return localStorage.getItem(PREVIEW_FILL_KEY) === "1";
+}
+
+// Whether flick notes are in use at all — the flick tool, flicking a hold's or slide's
+// release, and tap -> star -> flick cycling. Off by default: ordinary charts don't use
+// them. App-wide.
+const USE_FLICK_KEY = "charter.useFlick";
+
+function loadUseFlick(): boolean {
+  return localStorage.getItem(USE_FLICK_KEY) === "1";
+}
+
+// When on, a drag that moves notes lands the earliest selected note on the grid (the rest
+// keep their positions relative to it) even if that note started off the grid — otherwise a
+// note off the grid just moves by whole grid steps and stays off it. Off by default. App-wide.
+const SNAP_MOVE_KEY = "charter.snapMoveToGrid";
+
+function loadSnapMove(): boolean {
+  return localStorage.getItem(SNAP_MOVE_KEY) === "1";
+}
 
 function loadPct(c: PctSetting): number {
   const stored = localStorage.getItem(c.key);
@@ -278,6 +324,9 @@ export async function createEditor(
   let spawnHeadPct = loadPct(SPAWN_HEAD_PCT);
   let spawnTailPct = loadPct(SPAWN_TAIL_PCT);
   let ripplePct = loadPct(RIPPLE_PCT);
+  let previewFillNotes = loadPreviewFillNotes();
+  let useFlick = loadUseFlick();
+  let snapMoveToGrid = loadSnapMove();
   let previewHoverLane: number | null = null;
   // Keyboard lane keys for live tap/hold entry — app-wide setting (not per-project).
   let laneKeys = loadLaneKeys();
@@ -712,6 +761,7 @@ export async function createEditor(
     return btn;
   }
   function setTool(t: Tool): void {
+    if (t === "flick" && !useFlick) return;
     tool = t;
     if (t !== "slide") endActiveSlide();
     for (const [k, b] of toolButtons) b.classList.toggle("active", k === t);
@@ -876,6 +926,46 @@ export async function createEditor(
     },
   });
 
+  // Flick notes are opt-in: until this is on, the flick tool is disabled and nothing flips a
+  // note or a release into a flick.
+  const flickUseInput = el("input", {
+    type: "checkbox",
+    checked: useFlick,
+    onchange: () => {
+      useFlick = flickUseInput.checked;
+      localStorage.setItem(USE_FLICK_KEY, useFlick ? "1" : "0");
+      syncFlickTool();
+    },
+  });
+  const flickUseLabel = el(
+    "label",
+    { class: "flick-use", title: "Use flick notes — enables the Flick tool, flick releases for holds/slides, and tap → star → flick" },
+    flickUseInput,
+  );
+  function syncFlickTool(): void {
+    const btn = toolButtons.get("flick");
+    if (btn) btn.disabled = !useFlick;
+    if (!useFlick && tool === "flick") setTool("tap");
+  }
+
+  const snapMoveInput = el("input", {
+    type: "checkbox",
+    checked: snapMoveToGrid,
+    onchange: () => {
+      snapMoveToGrid = snapMoveInput.checked;
+      localStorage.setItem(SNAP_MOVE_KEY, snapMoveToGrid ? "1" : "0");
+    },
+  });
+  const snapMoveLabel = el(
+    "label",
+    {
+      class: "flick-use",
+      title:
+        "Snap moves to grid — moving notes lands the earliest selected note on the grid, even if it started off it; the rest keep their positions relative to it",
+    },
+    snapMoveInput,
+  );
+
   // The playback controls — full-screen preview borrows the first seven (everything up to
   // and including the time display) for its header, then hands them back in this order.
   const volumeLabel = el("span", { class: "mini-label", text: "🔊" });
@@ -917,6 +1007,7 @@ export async function createEditor(
       toolBtn("star", "★", "Star", "4"),
       toolBtn("slide", "◆", "Slide — click points across lanes, Esc ends the chain", "5"),
       toolBtn("flick", "↗", "Flick — click a selected hold or a selected slide's tail to toggle its release into a flick", "6"),
+      flickUseLabel,
     ),
     el(
       "div",
@@ -940,6 +1031,7 @@ export async function createEditor(
           "Pull every note (and hold/slide length) that's within about 2ms of a grid line exactly onto it — checks every standard division (plain and triplet), not just the one currently selected — fixes charts from before the grid-precision fixes, or edited by another tool, where simultaneous notes drifted apart by a hair",
         onclick: () => snapAllToGrid(),
       }),
+      snapMoveLabel,
     ),
     el("div", { class: "row-break" }),
     playGroup,
@@ -965,6 +1057,7 @@ export async function createEditor(
     ),
   );
   setTool("tap");
+  syncFlickTool();
 
   // --- canvas ---------------------------------------------------------------
   const canvas = el("canvas");
@@ -1216,6 +1309,15 @@ export async function createEditor(
       el("span", { class: "mini-label", text: "%" }),
     );
   }
+  const fillNotesInput = el("input", {
+    type: "checkbox",
+    checked: previewFillNotes,
+    onchange: () => {
+      previewFillNotes = fillNotesInput.checked;
+      localStorage.setItem(PREVIEW_FILL_KEY, previewFillNotes ? "1" : "0");
+      requestDraw();
+    },
+  });
   const spawnHeadControl = pctControl(SPAWN_HEAD_PCT, () => spawnHeadPct, (v) => (spawnHeadPct = v), "Spawn size — note / hold head");
   const spawnTailControl = pctControl(SPAWN_TAIL_PCT, () => spawnTailPct, (v) => (spawnTailPct = v), "Spawn size — hold tail");
   const rippleControl = pctControl(RIPPLE_PCT, () => ripplePct, (v) => (ripplePct = v), "Landing ripple size (0 = off)");
@@ -1313,6 +1415,7 @@ export async function createEditor(
         previewSizeInput,
         el("span", { class: "mini-label", text: "%" }),
       ),
+      el("label", { class: "row" }, fillNotesInput, el("span", { text: "Fill notes (off = outlines only)" })),
       spawnHeadControl,
       spawnTailControl,
       rippleControl,
@@ -1576,13 +1679,14 @@ export async function createEditor(
 
   function showHelp(): void {
     const rows: [string, string][] = [
-      ["1–6", "Select / Tap / Hold / Star / Slide / Flick tool"],
+      ["1–6", "Select / Tap / Hold / Star / Slide / Flick tool (Flick only while its checkbox is on)"],
       ["Click", "Place note (drag for hold length)"],
       ["Slide: click, click, …", "Chain points across lanes · drag the last point for a hold end"],
       ["Esc (Slide tool)", "End the current slide chain"],
       ["Drag note", "Move · drag a hold's tail to resize"],
-      ["Click selected hold (tool ≠ Slide)", "Toggle its release between normal and flick"],
-      ["Click selected slide's tail (tool ≠ Slide)", "Toggle the chain's ending between normal/hold and flick"],
+      ["Click selected tap / star / flick", "Cycle tap → star → flick → tap (flick only while the Flick checkbox is on, else tap ⇄ star)"],
+      ["Click selected hold (tool ≠ Slide)", "Toggle its release between normal and flick (Flick checkbox on)"],
+      ["Click selected slide's tail (tool ≠ Slide)", "Toggle the chain's ending between normal/hold and flick (Flick checkbox on)"],
       ["Right-click", "Delete note"],
       ["Shift+click", "Add to selection"],
       ["Del", "Delete selection"],
@@ -1597,6 +1701,7 @@ export async function createEditor(
       ["Wheel", "Scroll · Ctrl+wheel zoom · middle-drag pan"],
       ["Click waveform", "Seek"],
       ["Snap to grid button", "Pull near-grid notes/lengths exactly onto the grid"],
+      ["Checkbox right of Snap to grid", "Moving notes lands the earliest selected note on the grid (rest keep their relative positions)"],
       ["Click/drag song density strip (preview)", "Seek — shows a time/measure tooltip"],
       ["⛶ button (preview, top right) / F11", "Full-screen preview, laid out like the in-game screen — F11, Esc or ✕ to exit"],
       ["A S D F G H J K L", "Place a tap at the playhead, in lanes 9→1 left to right — works during playback; hold the key while playing to place a hold instead. Keys, input offset, and hold threshold all configurable in ⚙ Settings"],
@@ -2114,8 +2219,10 @@ export async function createEditor(
         d.selection.has(hit.note.id) &&
         (hit.note.kind === "tap" ||
           hit.note.kind === "star" ||
-          hit.note.kind === "hold" ||
-          (hit.note.kind === "slide" && tool !== "slide" && d.isSlideChainTail(hit.note)));
+          (useFlick &&
+            (hit.note.kind === "flick" ||
+              hit.note.kind === "hold" ||
+              (hit.note.kind === "slide" && tool !== "slide" && d.isSlideChainTail(hit.note)))));
 
       // Clicking a slide chain tail that's already open for editing lets you drag it
       // into a hold, or click again (no drag) to close it. Once it becomes a hold it
@@ -2124,7 +2231,16 @@ export async function createEditor(
       // below instead — a drag just repositions it like any other note; only a plain
       // click with no net movement opens it (handled in finishGesture).
       if (eligibleTail && openSlideTail()?.id === hit.note.id) {
-        gesture = { type: "place-slide", pre: d.begin(), note: hit.note, slideId: hit.note.slideId!, wasActive: true };
+        gesture = {
+          type: "place-slide",
+          pre: d.begin(),
+          note: hit.note,
+          slideId: hit.note.slideId!,
+          wasActive: true,
+          downX: x,
+          downY: y,
+          dragged: false,
+        };
         requestDraw();
         return;
       }
@@ -2137,10 +2253,12 @@ export async function createEditor(
       const orig = new Map<number, { t: number; lane: number }>();
       let minLane = 9;
       let maxLane = 1;
+      let lead: Note | null = null;
       for (const n of d.selectedNotes()) {
         orig.set(n.id, { t: n.t, lane: n.lane });
         minLane = Math.min(minLane, n.lane);
         maxLane = Math.max(maxLane, n.lane);
+        if (!lead || n.t < lead.t || (n.t === lead.t && n.lane < lead.lane)) lead = n;
       }
       gesture = {
         type: "move",
@@ -2151,6 +2269,10 @@ export async function createEditor(
         slideTogglePending: eligibleTail,
         kindTogglePending,
         moved: false,
+        leadId: lead ? lead.id : hit.note.id,
+        downX: x,
+        downY: y,
+        slopPassed: false,
         minLane,
         maxLane,
         part: hit.part === "tail" ? "tail" : "head",
@@ -2186,7 +2308,7 @@ export async function createEditor(
       const note = d.place(t, info.lane, "slide", 0, slideId);
       d.selection.clear();
       d.selection.add(note.id);
-      gesture = { type: "place-slide", pre, note, slideId, wasActive: false };
+      gesture = { type: "place-slide", pre, note, slideId, wasActive: false, downX: x, downY: y, dragged: true };
     } else {
       d.edit(() => {
         const note = d.place(t, info.lane, tool as NoteKind);
@@ -2224,6 +2346,10 @@ export async function createEditor(
         return;
       }
       case "place-slide": {
+        if (!gesture.dragged) {
+          if (Math.hypot(x - gesture.downX, y - gesture.downY) < CLICK_SLOP_PX) return;
+          gesture.dragged = true;
+        }
         if (info) {
           gesture.note.dur = Math.max(0, snapTime(info.t) - gesture.note.t);
           // Dragging into a hold and ending in a flick are mutually exclusive —
@@ -2260,10 +2386,29 @@ export async function createEditor(
             1 - gesture.minLane,
             Math.min(9 - gesture.maxLane, info.lane - gesture.startLane),
           );
+          // Snap-moves-to-grid, for a lead note that started OFF the grid (an on-grid one
+          // already lands on it below): the lead goes to the nearest grid line to where the
+          // drag would put it, and everything selected shifts by that same distance, so their
+          // positions relative to the lead — triplets among quarters, say — are untouched.
+          let leadShift: number | null = null;
+          const leadOrig = gesture.orig.get(gesture.leadId);
+          if (snapMoveToGrid && hasGrid && leadOrig) {
+            const leadOffGrid = Math.abs(snapWith(tm, leadOrig.t) - leadOrig.t) >= GRID_SNAP_TOLERANCE_SEC;
+            if (leadOffGrid) {
+              if (!gesture.slopPassed) {
+                if (Math.hypot(x - gesture.downX, y - gesture.downY) < CLICK_SLOP_PX) return;
+                gesture.slopPassed = true;
+              }
+              leadShift = snapWith(tm, Math.max(0, leadOrig.t + rawDt)) - leadOrig.t;
+            }
+          }
           for (const n of d.notes) {
             const o = gesture.orig.get(n.id);
             if (!o) continue;
-            if (!hasGrid) {
+            if (leadShift !== null) {
+              // the lead is the earliest note, so no other note can be pushed below 0
+              n.t = Math.max(0, o.t + leadShift);
+            } else if (!hasGrid) {
               n.t = Math.max(0, o.t + rawDt);
             } else if (kd === 0) {
               // No net movement keeps the exact original value: re-deriving it through the
@@ -2283,7 +2428,7 @@ export async function createEditor(
               const onGrid = Math.abs(snapWith(tm, o.t) - o.t) < GRID_SNAP_TOLERANCE_SEC;
               n.t = onGrid ? Math.max(0, there) : Math.max(0, o.t + (there - here));
             }
-            if (hasGrid && kd !== 0 && (n.kind === "hold" || (n.kind === "slide" && n.dur > 0))) {
+            if (leadShift === null && hasGrid && kd !== 0 && (n.kind === "hold" || (n.kind === "slide" && n.dur > 0))) {
               // A hold/slide-tail's length is otherwise carried through a move completely
               // unchanged — only its start shifts. If the END was already on the grid, keep
               // it on the SAME relative slot after the move too (same idea as the position
@@ -2360,7 +2505,11 @@ export async function createEditor(
           for (const id of gesture.orig.keys()) {
             const n = d.byId(id);
             if (!n) continue;
-            if (n.kind === "tap" || n.kind === "star") n.kind = n.kind === "tap" ? "star" : "tap";
+            // tap -> star -> (flick, when flicks are on) -> tap
+            if (n.kind === "tap") n.kind = "star";
+            else if (n.kind === "star") n.kind = useFlick ? "flick" : "tap";
+            else if (!useFlick) continue; // everything below is flick-only
+            else if (n.kind === "flick") n.kind = "tap";
             else if (n.kind === "hold") n.flickEnd = !n.flickEnd;
             else if (n.kind === "slide" && d.isSlideChainTail(n)) {
               n.flickEnd = !n.flickEnd;
@@ -2769,6 +2918,7 @@ export async function createEditor(
       spawnScaleHead: spawnHeadPct / 100,
       spawnScaleTail: spawnTailPct / 100,
       rippleScale: ripplePct / 100,
+      fillNotes: previewFillNotes,
     });
     requestAnimationFrame(frame);
   }

@@ -67,17 +67,17 @@ const COLORS = {
   star: "#ffcf5e",
   starRim: "#c69a2e",
   sim: "rgba(236, 234, 244, 0.35)",
-  slide: "#b48cff",
-  slideRim: "#7c56c9",
-  slideBody: "rgba(180, 140, 255, 0.30)",
-  slideChain: "rgba(180, 140, 255, 0.55)",
-  slidePreview: "rgba(180, 140, 255, 0.35)",
-  flick: "#4ea8ff",
-  flickRim: "#2b6fb8",
+  slide: "#4ea8ff",
+  slideRim: "#2b6fb8",
+  slideBody: "rgba(78, 168, 255, 0.30)",
+  slideChain: "rgba(78, 168, 255, 0.55)",
+  slidePreview: "rgba(78, 168, 255, 0.35)",
+  flick: "#b48cff",
+  flickRim: "#7c56c9",
   /** Selection ring for the note currently open in slide-edit mode — a hue nothing else on
    *  the canvas uses, and drawn much thicker than the plain selection ring (see
    *  ACTIVE_SLIDE_RING_WIDTH) so the two states read as clearly different at a glance. */
-  slideEditRing: "#2be8ff",
+  slideEditRing: "#ff3b3b",
   selectRing: "#ffffff",
   /** Tempo-change marker line + BPM label chip — orange, unused by any note/selection
    *  color, drawn over the grid AND the waveform so a BPM change is visible either way. */
