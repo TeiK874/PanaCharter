@@ -134,8 +134,10 @@ pub struct Shared {
     pos: f64,
     playing: bool,
     rate_mult: f64,
-    /// Music gain, 0-1. Ticks have their own fixed TICK_GAIN and aren't affected.
+    /// Music gain, 0-1. Ticks have their own level (TICK_GAIN x tick_volume) and aren't affected.
     volume: f64,
+    /// Tick loudness relative to the default, 0-2.
+    tick_volume: f64,
     ticks: Vec<f64>, // note times in seconds, sorted
     ticks_enabled: bool,
     ticks_dirty: bool,
@@ -156,6 +158,7 @@ impl NativeAudio {
                 playing: false,
                 rate_mult: 1.0,
                 volume: 1.0,
+                tick_volume: 1.0,
                 ticks: Vec::new(),
                 ticks_enabled: true,
                 ticks_dirty: false,
@@ -215,6 +218,7 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
     let mut rate_mult;
     let mut ticks_enabled;
     let mut volume;
+    let mut tick_volume;
 
     let channels = pcm.channels.max(1) as usize;
     let frames_total = (pcm.data.len() / channels) as f64;
@@ -270,6 +274,7 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
             rate_mult = s.rate_mult;
             ticks_enabled = s.ticks_enabled;
             volume = s.volume;
+            tick_volume = s.tick_volume;
             if s.ticks_dirty {
                 s.ticks_dirty = false;
                 tick_idx = lower_bound(&s.ticks, pos / pcm.rate as f64 + 1e-6);
@@ -300,7 +305,7 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
                     *age += 1.0;
                 }
                 tick_ages.retain(|a| *a / pcm.rate as f64 <= TICK_LEN);
-                let tick_add = tick * TICK_GAIN * 32767.0;
+                let tick_add = tick * TICK_GAIN * tick_volume as f32 * 32767.0;
 
                 if pos + 1.0 >= frames_total {
                     ended = true;
@@ -449,6 +454,11 @@ pub fn native_set_ticks(
     s.ticks.sort_by(|a, b| a.partial_cmp(b).unwrap());
     s.ticks_enabled = enabled;
     s.ticks_dirty = true;
+}
+
+#[tauri::command]
+pub fn native_set_tick_volume(state: State<'_, NativeAudio>, volume: f64) {
+    state.inner.lock().unwrap().tick_volume = volume.clamp(0.0, 2.0);
 }
 
 #[tauri::command]

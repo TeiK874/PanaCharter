@@ -142,3 +142,5 @@ export const nativePosition = () =>
 export const nativeSetTicks = (times: number[], enabled: boolean) =>
   invoke<void>("native_set_ticks", { times, enabled });
 export const nativeSetVolume = (volume: number) => invoke<void>("native_set_volume", { volume });
+export const nativeSetTickVolume = (volume: number) =>
+  invoke<void>("native_set_tick_volume", { volume });

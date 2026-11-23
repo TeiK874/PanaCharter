@@ -283,6 +283,7 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
    unlike the incidental wrapping flex-wrap already does when a row runs out of space. */
 .editor-toolbar .row-break { flex-basis: 100%; height: 0; }
 .editor-toolbar input[type="number"] { width: 74px; padding: 4px 7px; }
+.editor-toolbar input.volume-number { width: 56px; }
 .editor-toolbar select { padding: 4px 7px; }
 .editor-toolbar .mini-label { font-size: 11px; color: var(--muted); }
 .editor-toolbar input[type="range"] { width: 80px; accent-color: var(--pink); }
@@ -379,6 +380,7 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
 .preview-fs-controls { display: flex; align-items: center; gap: 8px; flex: none; pointer-events: auto; }
 .preview-fs-controls select { padding: 4px 7px; }
 .preview-fs-controls input[type="range"] { width: 80px; accent-color: var(--pink); }
+.preview-fs-controls input.volume-number { width: 56px; padding: 4px 7px; }
 .preview-fs-controls .mini-label { font-size: 11px; color: var(--muted); }
 .preview-fs-strip { flex: 1; min-width: 0; height: 62%; }
 .preview-fs-restart { flex: none; pointer-events: auto; }

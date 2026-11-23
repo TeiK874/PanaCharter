@@ -138,6 +138,8 @@ const SPAWN_HEAD_PCT: PctSetting = { key: "charter.previewSpawnHeadPct", min: 0,
 const SPAWN_TAIL_PCT: PctSetting = { key: "charter.previewSpawnTailPct", min: 0, max: 100, def: 0 };
 /** Landing ripple size, % of its default (0 = off). */
 const RIPPLE_PCT: PctSetting = { key: "charter.previewRipplePct", min: 0, max: 100, def: 100 };
+/** Loudness of the note ticks, % of the default level. App-wide. */
+const TICK_VOLUME_PCT: PctSetting = { key: "charter.tickVolumePct", min: 0, max: 200, def: 100 };
 
 // Fill notes in the preview with their bright color, or draw them as outlines in it. Off by
 // default. App-wide.
@@ -395,6 +397,7 @@ export async function createEditor(
   player.ticksEnabled = loadTickEnabled();
   player.tickSound = loadTickSound();
   player.volume = loadVolumePct() / 100;
+  player.tickVolume = loadPct(TICK_VOLUME_PCT) / 100;
   await player.init();
 
   const bpm = () => manifest.bpm ?? 120;
@@ -933,11 +936,35 @@ export async function createEditor(
     max: "100",
     value: String(Math.round(player.volume * 100)),
     title: "Audio volume",
+    oninput: () => applyVolumePct(Number(volumeInput.value)),
+  });
+  // The same volume as a typed number (percent) — the slider is too coarse for exact levels.
+  const volumeNumber = el("input", {
+    type: "number",
+    class: "volume-number",
+    min: "0",
+    max: "100",
+    step: "1",
+    value: String(Math.round(player.volume * 100)),
+    title: "Audio volume (0–100 %)",
     oninput: () => {
-      player.setVolume(Number(volumeInput.value) / 100);
-      localStorage.setItem(VOLUME_KEY, volumeInput.value);
+      // Apply while typing, but leave the box alone so a half-typed value isn't rewritten.
+      const raw = Number(volumeNumber.value);
+      if (volumeNumber.value.trim() === "" || !Number.isFinite(raw)) return;
+      applyVolumePct(raw, volumeNumber);
+    },
+    onchange: () => {
+      const raw = Number(volumeNumber.value);
+      applyVolumePct(Number.isFinite(raw) && volumeNumber.value.trim() !== "" ? raw : player.volume * 100);
     },
   });
+  function applyVolumePct(pct: number, typing?: HTMLInputElement): void {
+    const v = Math.max(0, Math.min(100, Math.round(pct)));
+    player.setVolume(v / 100);
+    localStorage.setItem(VOLUME_KEY, String(v));
+    volumeInput.value = String(v);
+    if (typing !== volumeNumber) volumeNumber.value = String(v);
+  }
 
   const layoutSelect = el(
     "select",
@@ -999,7 +1026,7 @@ export async function createEditor(
   // The playback controls — full-screen preview borrows the first seven (everything up to
   // and including the time display) for its header, then hands them back in this order.
   const volumeLabel = el("span", { class: "mini-label", text: "🔊" });
-  const playControls = [playBtn, rateSelect, tickBtn, tickSoundSelect, volumeLabel, volumeInput, timeDisplay];
+  const playControls = [playBtn, rateSelect, tickBtn, tickSoundSelect, volumeLabel, volumeInput, volumeNumber, timeDisplay];
   const playGroup = el(
     "div",
     { class: "group" },
@@ -1362,6 +1389,16 @@ export async function createEditor(
   const spawnHeadControl = pctControl(SPAWN_HEAD_PCT, () => spawnHeadPct, (v) => (spawnHeadPct = v), "Spawn size — note / hold head");
   const spawnTailControl = pctControl(SPAWN_TAIL_PCT, () => spawnTailPct, (v) => (spawnTailPct = v), "Spawn size — hold tail");
   const rippleControl = pctControl(RIPPLE_PCT, () => ripplePct, (v) => (ripplePct = v), "Landing ripple size (0 = off)");
+  let tickVolumePct = loadPct(TICK_VOLUME_PCT);
+  const tickVolumeControl = pctControl(
+    TICK_VOLUME_PCT,
+    () => tickVolumePct,
+    (v) => {
+      tickVolumePct = v;
+      player.setTickVolume(v / 100);
+    },
+    "Note tick volume",
+  );
 
   const fsIntroEnabledInput = el("input", {
     type: "checkbox",
@@ -1439,6 +1476,12 @@ export async function createEditor(
       el("p", {
         class: "dialog-body",
         text: "How long a lane key must be held down, while playing, before releasing it places a hold instead of a tap.",
+      }),
+      el("hr", { class: "dialog-sep" }),
+      tickVolumeControl,
+      el("p", {
+        class: "dialog-body",
+        text: "How loud the hit tick played on each note is, relative to its default level (100 %). Separate from the music volume.",
       }),
       el("hr", { class: "dialog-sep" }),
       el(

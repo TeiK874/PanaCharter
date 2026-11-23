@@ -92,6 +92,7 @@ fn main() {
             audio_native::native_position,
             audio_native::native_set_ticks,
             audio_native::native_set_volume,
+            audio_native::native_set_tick_volume,
             bandori_batch::bandori_scan,
             bandori_batch::bandori_chart,
             bandori_batch::bandori_meta,

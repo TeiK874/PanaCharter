@@ -16,6 +16,9 @@ const NATIVE_POLL_MS = 150;
 /** Relative to index.html — copied into ui/dist/assets by the build script. */
 const TICK_SE_URL = "assets/SE_Perfect.mp3";
 
+/** Web-audio gain of the note ticks at the default (100 %) tick volume. */
+const TICK_BASE_GAIN = 0.35;
+
 export type TickSound = "beep" | "se";
 
 export class Player {
@@ -24,6 +27,8 @@ export class Player {
   playing = false;
   rate = 1;
   volume = 1;
+  /** Note-tick loudness relative to the default level (1 = default, 0 = silent). */
+  tickVolume = 1;
   ticksEnabled = true;
   /** Which tick sound to play. "se" only takes effect on the web backend (see
    *  setTickSound) — the native mixer only knows how to synthesize the beep. */
@@ -81,6 +86,7 @@ export class Player {
       // without this a level set in a previous project would carry over while
       // the (fresh) slider claims 100%.
       void this.queued(() => api.nativeSetVolume(this.volume)).catch(() => {});
+      void this.queued(() => api.nativeSetTickVolume(this.tickVolume)).catch(() => {});
     } else {
       // The native mixer synthesizes its own beep and has no MP3 decode/resample path;
       // only bother preloading the sample when the web backend will actually use it.
@@ -208,7 +214,17 @@ export class Player {
     }
   }
 
-  /** Volume of the decoded audio, 0–1. Ticks have their own fixed level and are unaffected. */
+  /** Loudness of the note ticks relative to their default level, 0–2. Independent of the music volume. */
+  setTickVolume(volume: number): void {
+    this.tickVolume = Math.max(0, Math.min(2, volume));
+    if (this.native) {
+      void this.queued(() => api.nativeSetTickVolume(this.tickVolume)).catch(() => {});
+    } else if (this.tickGain) {
+      this.tickGain.gain.value = TICK_BASE_GAIN * this.tickVolume;
+    }
+  }
+
+  /** Volume of the decoded audio, 0–1. Ticks have their own level (setTickVolume) and are unaffected. */
   setVolume(volume: number): void {
     this.volume = Math.max(0, Math.min(1, volume));
     if (this.native) {
@@ -417,7 +433,7 @@ export class Player {
       this.gain.gain.value = this.volume;
       this.gain.connect(this.ctx.destination);
       this.tickGain = this.ctx.createGain();
-      this.tickGain.gain.value = 0.35;
+      this.tickGain.gain.value = TICK_BASE_GAIN * this.tickVolume;
       this.tickGain.connect(this.ctx.destination);
     }
     return this.ctx;
