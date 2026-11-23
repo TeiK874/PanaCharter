@@ -340,7 +340,13 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
 }
 .preview-speed-row input[type="number"] { width: 68px; padding: 4px 6px; }
 .preview-speed-row input[type="range"] { width: 70px; accent-color: var(--pink); }
-.preview-canvas-wrap { flex: 1; position: relative; min-height: 0; }
+.preview-canvas-wrap { flex: 1; position: relative; min-height: 0; background: #101018; }
+/* the jacket behind the canvas, dimmed and cropped to fill the panel */
+.preview-bg {
+  position: absolute; inset: 0;
+  background-position: center; background-repeat: no-repeat; background-size: cover;
+  filter: brightness(0.28);
+}
 .preview-canvas-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 
 .flick-use { display: inline-flex; align-items: center; cursor: pointer; }
@@ -363,7 +369,8 @@ dialog.dialog::backdrop { background: rgba(8, 8, 14, 0.65); }
   background-size: cover;
   filter: brightness(0.3);
 }
-.preview-fs .preview-canvas-wrap { position: absolute; inset: 0; }
+.preview-fs .preview-canvas-wrap { position: absolute; inset: 0; background: none; }
+.preview-fs .preview-bg { display: none; } /* full screen has its own, larger background */
 .preview-fs-header {
   position: absolute; box-sizing: border-box;
   display: flex; align-items: center; gap: 14px; padding: 0 14px;

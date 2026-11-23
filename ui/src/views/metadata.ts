@@ -7,6 +7,8 @@ import type { ChartDoc } from "../editor/chart.js";
 export interface MetadataCallbacks {
   onChanged: () => void;
   onAudioChanged: () => void;
+  /** The jacket image was replaced. */
+  onJacketChanged?: () => void;
 }
 
 export function openMetadataDialog(
@@ -144,6 +146,7 @@ export function openMetadataDialog(
                 jacketImg.src = setJacketUrl(new Blob([file.bytes]));
                 jacketBox.replaceChildren(jacketImg);
                 cb.onChanged();
+                cb.onJacketChanged?.();
                 toast("Jacket set — the server crops it square at 512×512", "ok");
               }),
           }),

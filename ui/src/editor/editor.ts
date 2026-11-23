@@ -1108,7 +1108,18 @@ export async function createEditor(
 
   // --- note preview -----------------------------------------------------------
   const previewCanvas = el("canvas");
-  const previewWrap = el("div", { class: "preview-canvas-wrap" }, previewCanvas);
+  // The jacket, dimmed, behind the preview canvas (CSS does the dimming and cropping).
+  const previewBg = el("div", { class: "preview-bg" });
+  const previewWrap = el("div", { class: "preview-canvas-wrap" }, previewBg, previewCanvas);
+  let panelJacketUrl: string | null = null;
+  async function refreshPanelJacket(): Promise<void> {
+    const bytes = await api.projectGetJacket(data.id).catch(() => null);
+    if (disposed) return;
+    if (panelJacketUrl) URL.revokeObjectURL(panelJacketUrl);
+    panelJacketUrl = bytes ? URL.createObjectURL(new Blob([bytes])) : null;
+    previewBg.style.backgroundImage = panelJacketUrl ? `url("${panelJacketUrl}")` : "none";
+  }
+  void refreshPanelJacket();
   const previewRenderer = new NotePreviewRenderer(previewCanvas);
 
   previewCanvas.addEventListener("pointerdown", (e) => {
@@ -2125,6 +2136,7 @@ export async function createEditor(
         requestDraw();
       },
       onAudioChanged: () => void attempt(loadAudio),
+      onJacketChanged: () => void refreshPanelJacket(),
     });
   }
 
@@ -3136,6 +3148,8 @@ export async function createEditor(
       window.removeEventListener("blur", onBlur);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
       cancelFsIntroWait();
+      if (panelJacketUrl) URL.revokeObjectURL(panelJacketUrl);
+      panelJacketUrl = null;
       if (fsActive) await exitPreviewFullscreen();
       resizeObserver.disconnect();
       previewResizeObserver.disconnect();

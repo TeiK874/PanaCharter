@@ -81,7 +81,6 @@ export interface PreviewRect {
 const JUDGE_RADIUS_MAX_SCALE = 1.25;
 
 const COLORS = {
-  bg: "#101018",
   judge: "#20202f",
   judgeRim: "#4a4a6e",
   tap: "#ff8fb0",
@@ -322,12 +321,9 @@ export class NotePreviewRenderer {
 
   draw(s: PreviewState): void {
     const { ctx, w, h } = this;
+    // Never painted over: the canvas stays transparent so the jacket (and, behind it, the
+    // panel's base color) — both CSS, on the wrapper — shows through.
     ctx.clearRect(0, 0, w, h);
-    // Full screen leaves the canvas transparent so the jacket behind it shows through.
-    if (!this.fullscreen) {
-      ctx.fillStyle = COLORS.bg;
-      ctx.fillRect(0, 0, w, h);
-    }
 
     const { spawn, fanRadius, statsTop, comboY } = this.geometry();
     const stageScale = this.fullscreen ? this.stage().s : 1;
