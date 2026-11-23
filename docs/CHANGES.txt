@@ -1,0 +1,227 @@
+================================================================================
+ PanaCharter - Changelog
+================================================================================
+
+Versions up to 20261002 were numbered by date. From 1.0.0 on, versions are
+numbered MAJOR.MINOR.PATCH.
+
+--------------------------------------------------------------------------------
+Version 1.0.0
+--------------------------------------------------------------------------------
+  - Added a full-screen preview (the button at the preview's top right, or
+    F11): an in-game-style 1920x1080 layout scaled to fit the screen, with
+    the jacket dimmed behind it and a header holding the playback controls
+    (including a jump-to-start button), the song-density seek bar, and an
+    exit button. Lane keys and the playback shortcuts keep working there.
+    Playing from the start first fades in the jacket, song title and artist
+    for a couple of seconds before the music starts; the card can be turned
+    off, and its names switched between Japanese and English, in Settings.
+  - Made the note preview closer to the real game: ripples where notes land,
+    a configurable size for notes as they spawn (and for the ripples), notes
+    growing steadily as they approach, hold ribbons no wider than their
+    markers, outline-style notes (filling them is a setting), a star mark
+    inside star notes, and the pink ring around the spawn point. The jacket
+    is also shown dimmed behind the preview in the editor, and slide notes
+    are now blue and flick notes purple.
+  - Flick notes are now opt-in: a checkbox to the right of the toolbar's
+    Flick button (off by default) enables them, and the tap -> star -> flick
+    click cycle only includes flicks while it is ticked.
+  - Added a checkbox next to "Snap to grid": when ticked, moving notes lands
+    the earliest selected note exactly on the grid, with the rest of the
+    selection keeping its positions relative to it.
+  - Added a "Vertical ↑" editor layout in which time runs from the bottom to
+    the top; the mouse wheel scrolls the matching way.
+  - Added a number box beside the volume slider, and a note-tick volume
+    setting (0-200% of the default) in Settings.
+  - Fixed pasted hold tails losing their simultaneity with notes at the same
+    instant; the grid tolerance used by pasting, moving and "Snap to grid"
+    is now a uniform 2 ms.
+  - Fixed clicking a slide's end point to deselect it sometimes creating a
+    hold ending at the same position.
+  - Renamed the app to PanaCharter.
+
+--------------------------------------------------------------------------------
+Version 20261002
+--------------------------------------------------------------------------------
+  - Fixed a hold note's tail sometimes not being judged simultaneous, during
+    actual gameplay, with another note placed at the exact same instant
+    (and "Snap to grid" failing to catch or fix it).
+  - Added live keyboard note entry: pressing A S D F G H J K L places a tap
+    note at the playhead in one of the 9 lanes, including while the song is
+    playing; holding a key down while playing places a hold instead. The
+    keys, how early notes land relative to the keypress, and how long a
+    hold-down counts as a hold are all configurable from the new, expanded
+    "Settings" dialog (which also still holds the note-preview settings).
+  - Fixed the note preview's "simultaneous notes" mark sometimes not
+    appearing on notes that the main editor already shows as simultaneous.
+  - Fixed a selected hold note flipping to a flick ending just from dragging
+    its tail to resize it.
+
+--------------------------------------------------------------------------------
+Version 20261001
+--------------------------------------------------------------------------------
+  - Added flick notes: a standalone flick, a hold ending in a flick, and a
+    slide chain ending in a flick.
+  - Added a "Snap to grid" button that pulls every note (and hold/slide
+    length) that's only a hair off the beat grid exactly onto it, fixing
+    charts affected by earlier timing-precision issues.
+  - Added an in-game-style note preview panel: notes fly toward 9 judgment
+    circles with chart statistics, a live combo counter shown just above
+    the spot where notes appear, and a whole-song note-density graph that
+    doubles as a seek bar (click or drag it to jump to that point in the
+    song, with a time/measure tooltip, and the main editor view scrolls to
+    follow).
+  - Note-tick on/off, tick sound, volume, and the note preview panel's width
+    are now remembered across every project you open, instead of resetting
+    each time.
+  - The toolbar now always starts a new row right before the playback
+    controls, regardless of window width.
+  - Moved the song-title button out of the editor's own toolbar and onto the
+    app's top bar, so its position no longer shifts depending on the
+    title's length.
+  - Added mid-song time-signature changes, alongside the existing mid-song
+    tempo changes.
+  - Preserved spacing between notes when pasting across different snap
+    settings.
+  - Added a measure-jump dialog, and manual seeks now keep the playhead
+    visible on screen.
+  - Clicking an already-selected tap/star note now flips it to the other
+    kind.
+  - Fixed flick notes being lost (downgraded to plain taps/holds) when
+    importing Bandori or Bestdori charts.
+  - Various timing-precision fixes: note timing rounded to microsecond
+    precision, hold/slide lengths that drift a hair off the grid when
+    moved or pasted are now self-healed back onto it.
+
+--------------------------------------------------------------------------------
+Version 20260827
+--------------------------------------------------------------------------------
+  - Added slide note editing: a dedicated Slide tool places chained points
+    across lanes by clicking; a chain can be extended, or ended in a hold
+    by dragging its last point into one.
+  - Added mid-song tempo changes: a "Tempo..." dialog lists BPM changes
+    partway through the song, with the grid and measure numbering
+    following each change from its point onward.
+  - Added Ctrl+Shift+V to paste copied notes mirrored left-to-right, for
+    quickly building a symmetric section of a chart.
+  - Added a playback volume control (a slider in the toolbar).
+  - Added a switchable tick sound: a sample sound effect, in addition to
+    the original synthesized beep.
+  - Fixed existing notes silently shifting out of sync with the song
+    whenever the grid's start offset was adjusted - every note now moves
+    together with the offset, instead of only the grid moving under them.
+  - Fixed exporting and re-importing a project package losing its editor
+    settings (grid offset, tempo changes, snap division, zoom level),
+    which used to silently reset to defaults.
+
+
+================================================================================
+ PanaCharter - 更新履歴
+================================================================================
+
+20261002までのバージョンは日付で採番していました。1.0.0以降は「メジャー.マイナー.
+パッチ」形式で採番します。
+
+--------------------------------------------------------------------------------
+バージョン 1.0.0
+--------------------------------------------------------------------------------
+  - フルスクリーンプレビューを追加(プレビュー右上のボタン、またはF11)。
+    インゲーム風の1920x1080レイアウトを画面に合わせて拡大表示し、背景に暗
+    くしたジャケットを表示します。ヘッダーには再生操作(先頭に戻るボタンを
+    含む)、曲全体の密度シークバー、終了ボタンを配置。レーンキーや再生のシ
+    ョートカットもそのまま使えます。先頭から再生するときは、ジャケット・曲
+    名・アーティスト名を数秒フェードイン表示してから再生を開始します。この
+    カードの表示有無や、名前を日本語/英語のどちらで表示するかは「Settings」
+    で設定できます。
+  - ノーツプレビューを実際のゲームにより近づけました: ノーツが判定位置に重な
+    ったときの波紋、射出時のノーツの大きさ(と波紋の大きさ)の設定、接近中
+    に一定の割合で大きくなる表示、マーカーより太くならないホールドの帯、
+    枠線のみのノーツ表示(塗りつぶしは設定で選択)、スターノーツ内の☆印、
+    射出点を囲むピンクの円。編集画面のプレビューでも、背景に暗くしたジャケ
+    ットを表示します。また、スライドノーツを青、フリックノーツを紫に変更。
+  - フリックノーツを使用するかどうかを選べるように変更。ツールバーのフリッ
+    クボタンの右にあるチェックボックスで有効にします(初期状態はオフ)。タ
+    ップ→スター→フリックと切り替わるクリックも、オンのときだけフリックを
+    含みます。
+  - 「Snap to grid」の隣にチェックボックスを追加。オンのとき、ノーツを移動
+    すると、選択中の最も早いノーツが正確にグリッドに乗り、残りは相対位置を
+    保ったまま移動します。
+  - 時間が下から上へ進む「Vertical ↑」レイアウトを追加。マウスホイールも
+    それに合わせた向きでスクロールします。
+  - 音量スライダーの隣に数値入力欄を追加。また、ノーツ音の音量(既定値の
+    0〜200%)を「Settings」で設定できるように変更。
+  - ペーストしたホールドノーツの終端が、同じ瞬間にあるノーツとの同時押し
+    でなくなってしまう不具合を修正。ペースト・移動・「Snap to grid」で使う
+    グリッドの許容誤差を一律2msに統一。
+  - スライドの終点をクリックして選択解除したときに、同じ位置にホールドの
+    終端ができてしまうことがある不具合を修正。
+  - アプリ名を「PanaCharter」に変更。
+
+--------------------------------------------------------------------------------
+バージョン 20261002
+--------------------------------------------------------------------------------
+  - ホールドノーツの終端が、同じ瞬間に配置された別のノーツと、実際のゲーム
+    プレイ中に同時押しとして判定されないことがある不具合を修正(「Snap to
+    grid」でも検出・修正できていなかった問題を含む)。
+  - キーボードでのリアルタイムなノーツ入力に対応。A S D F G H J K Lのいずれ
+    かを押すと、再生位置にその9レーンのいずれかへタップノーツが配置されま
+    す(曲の再生中も使用可)。再生中にキーを押し続けるとホールドノーツにな
+    ります。キーの割り当て、キー入力からどれだけ早くノーツを配置するか、ど
+    れだけ押し続けたらホールドと判定するかは、新しく拡張された「Settings」
+    ダイアログ(従来のノーツプレビュー設定もここに統合)から設定できます。
+  - メインの編集画面ではすでに同時押しとして表示されているノーツが、ノーツ
+    プレビュー側の「同時押し」マークに表示されないことがある不具合を修正。
+  - 選択中のホールドノーツが、終端をドラッグしてリサイズしただけでフリック
+    に切り替わってしまう不具合を修正。
+
+--------------------------------------------------------------------------------
+バージョン 20261001
+--------------------------------------------------------------------------------
+  - フリックノーツに対応(単発のフリック、ホールド末尾のフリック、スライド
+    末尾のフリック)。
+  - 拍のグリッドからごくわずかにずれているノーツ(ホールド/スライドの長さ
+    を含む)を正確にグリッド上へ一括で乗せる「Snap to grid」ボタンを追加
+    (以前のタイミング精度の問題の影響を受けた譜面を修正できます)。
+  - インゲーム風のノーツプレビューパネルを追加: 9つの判定サークルへ向かっ
+    てノーツが飛んでいく表示に加え、譜面の統計情報、ノーツの発生点のすぐ上
+    のライブなコンボ数表示、曲全体のノーツ密度グラフ(シークバーを兼ねてお
+    り、クリックやドラッグでその位置へ移動でき、時間・小節番号のツールチッ
+    プが表示され、メインの編集画面も連動してスクロールします)を表示。
+  - ノーツ音のオン/オフ、音の種類、音量、ノーツプレビューパネルの幅を、プロ
+    ジェクトを開くたびにリセットされず、共通で記憶するように変更。
+  - ウィンドウ幅に関わらず、ツールバーの再生操作のところで常に改行するよう
+    に変更。
+  - 曲名ボタンをエディタ内ツールバーから最上部のアプリバーへ移動し、曲名の
+    長さでボタンの位置が変わらないように変更。
+  - 既存の曲中テンポ変更に加え、曲中の拍子変更に対応。
+  - 異なるスナップ設定間でペーストした際、ノーツ間の間隔が保たれるように変
+    更。
+  - 小節番号を指定してジャンプできるダイアログを追加。また、手動でシークし
+    た際に再生位置が画面内に収まるように変更。
+  - 選択済みのタップ/スターノーツをクリックすると、もう一方の種類に切り替
+    わるように変更。
+  - Bandori/Bestdoriの譜面をインポートした際にフリックノーツが失われ、普通
+    のタップ/ホールドになってしまう不具合を修正。
+  - タイミング精度に関する各種修正: ノーツのタイミングをマイクロ秒単位に丸
+    め、移動やペーストでグリッドからわずかにずれたホールド/スライドの長さ
+    を自動的に補正するように変更。
+
+--------------------------------------------------------------------------------
+バージョン 20260827
+--------------------------------------------------------------------------------
+  - スライドノーツの編集に対応: 専用のSlideツールでレーンをまたいでクリッ
+    クし、連結したポイント列を作成できます。チェーンは延長でき、最後のポ
+    イントをドラッグすることでホールドとして終端できます。
+  - 曲中のテンポ変更に対応: 「Tempo…」ダイアログで曲の途中のBPM変更を一覧
+    表示でき、グリッドと小節番号は変更された時点からそれに追従します。
+  - Ctrl+Shift+Vで、コピーしたノーツを左右反転して貼り付けられるように追
+    加。譜面の左右対称な部分をすばやく作成できます。
+  - 再生音量の調整機能を追加(ツールバーのスライダー)。
+  - クリック音(ティック音)を、従来の合成ビープ音に加えてサンプル音にも
+    切り替えられるように追加。
+  - グリッドの開始オフセットを調整した際、既存のノーツが曲とずれてしまう
+    不具合を修正。オフセットの変更に合わせて、すべてのノーツが一緒に移動
+    するように変更。
+  - プロジェクトパッケージをエクスポートして再インポートすると、エディタ
+    の設定(グリッドオフセット、テンポ変更、スナップ分割数、ズーム倍率)
+    が初期値に戻ってしまっていた不具合を修正。
