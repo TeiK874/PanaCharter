@@ -1,5 +1,5 @@
 [package]
-name = "charter"
+name = "panacharter"
 version = "0.1.0"
 edition = "2024"
 description = "Beatmap editor for SIF2 custom-songs servers"

@@ -1,4 +1,4 @@
-# Charter ♪
+# PanaCharter ♪
 
 A desktop beatmap editor for SIF2 (Love Live! School Idol Festival 2) custom songs,
 built with Tauri + Rust and a dependency-free vanilla-TypeScript frontend.
@@ -12,8 +12,8 @@ scores; unchanged audio/jackets are not re-sent.
 
 ## Credits
 
-Charter was created by [ethanaobrien](https://git.ethanthesleepy.one/ethanaobrien), who
-also wrote the [ew](https://git.ethanthesleepy.one/ethanaobrien/ew) server it works with.
+PanaCharter is based on Charter, created by [ethanaobrien](https://git.ethanthesleepy.one/ethanaobrien),
+who also wrote the [ew](https://git.ethanthesleepy.one/ethanaobrien/ew) server it works with.
 The original project lives at
 [ethanaobrien/charter](https://git.ethanthesleepy.one/ethanaobrien/charter); this
 repository carries additional changes on top of it.
@@ -79,7 +79,7 @@ npm run watch        # optional: tsc -w in a second terminal; Ctrl+R reloads the
 ## Build a release binary
 
 ```sh
-npx tauri build --no-bundle   # binary at src-tauri/target/release/charter
+npx tauri build --no-bundle   # binary at src-tauri/target/release/panacharter
 ```
 
 CI does this automatically: `.forgejo/workflows/release.yml` builds Linux + Windows

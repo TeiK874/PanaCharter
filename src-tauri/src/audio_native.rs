@@ -235,7 +235,7 @@ fn mixer(inner: Arc<Mutex<Shared>>, generation: Arc<AtomicU64>, my_gen: u64) {
     let stream = unsafe {
         (api.new_)(
             std::ptr::null(),
-            c"Charter".as_ptr(),
+            c"PanaCharter".as_ptr(),
             PA_STREAM_PLAYBACK,
             std::ptr::null(),
             c"chart playback".as_ptr(),

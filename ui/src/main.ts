@@ -92,7 +92,7 @@ function setTopbarTitle(text: string | null, onClick?: () => void, tooltip?: str
 const topbar = el(
   "div",
   { class: "topbar" },
-  el("span", { class: "wordmark" }, "CHARTER", el("span", { class: "note-glyph", text: " ♪" })),
+  el("span", { class: "wordmark" }, "PANACHARTER", el("span", { class: "note-glyph", text: " ♪" })),
   topbarTitleBtn,
   el("span", { class: "spacer" }),
   serverChip,

@@ -159,7 +159,7 @@ export async function createConnectView(ctx: ConnectCtx): Promise<{ root: HTMLEl
     el(
       "div",
       { class: "connect-panel" },
-      el("h1", {}, "CHARTER ", el("span", { text: "♪" })),
+      el("h1", {}, "PANACHARTER ", el("span", { text: "♪" })),
       el("p", {
         class: "sub",
         text: "Chart SIF2 beatmaps and manage them on an ew custom-songs server. You can work on local projects offline — connect and log in when you're ready to upload.",

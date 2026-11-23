@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p out
-          cp src-tauri/target/release/charter out/charter-linux-x86_64
+          cp src-tauri/target/release/panacharter out/panacharter-linux-x86_64
 
       - name: Upload Linux artefacts
         uses: actions/upload-artifact@v3
@@ -130,8 +130,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           New-Item -ItemType Directory -Path out -Force | Out-Null
-          Copy-Item -Path src-tauri\target\release\charter.exe `
-                    -Destination out\charter-windows-x86_64.exe -Force
+          Copy-Item -Path src-tauri\target\release\panacharter.exe `
+                    -Destination out\panacharter-windows-x86_64.exe -Force
 
       - name: Upload Windows artefacts
         uses: actions/upload-artifact@v3
@@ -160,16 +160,16 @@ jobs:
         shell: bash
         run: |
           mkdir -p out
-          cp linux/charter-linux-x86_64         out/
-          cp windows/charter-windows-x86_64.exe out/
-          chmod +x out/charter-linux-x86_64
+          cp linux/panacharter-linux-x86_64         out/
+          cp windows/panacharter-windows-x86_64.exe out/
+          chmod +x out/panacharter-linux-x86_64
           cat > out/README.txt <<'EOF'
-          Charter — SIF2 beatmap editor
-          =============================
+          PanaCharter — SIF2 beatmap editor
+          ==================================
 
           Run:
-            charter-linux-x86_64         (Linux x86_64; needs webkit2gtk-4.1 installed)
-            charter-windows-x86_64.exe   (Windows x86_64; needs the WebView2 runtime,
+            panacharter-linux-x86_64         (Linux x86_64; needs webkit2gtk-4.1 installed)
+            panacharter-windows-x86_64.exe   (Windows x86_64; needs the WebView2 runtime,
                                           preinstalled on Windows 10/11)
           EOF
           ls -la out/
@@ -178,7 +178,7 @@ jobs:
         if: startsWith(github.ref, 'refs/heads/')
         uses: actions/upload-artifact@v3
         with:
-          name: charter
+          name: panacharter
           path: ./out/
 
       - name: Publish release
