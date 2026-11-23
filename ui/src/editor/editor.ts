@@ -165,6 +165,20 @@ function loadSnapMove(): boolean {
   return localStorage.getItem(SNAP_MOVE_KEY) === "1";
 }
 
+// The song-info card shown (fading in and out, centered) when full-screen playback starts
+// from the beginning: whether to show it at all, and whether its title and artist are the
+// Japanese or the English names. App-wide.
+const FS_INTRO_ENABLED_KEY = "charter.fsIntroEnabled";
+const FS_INTRO_LANG_KEY = "charter.fsIntroLang";
+type FsIntroLang = "ja" | "en";
+
+function loadFsIntroEnabled(): boolean {
+  return localStorage.getItem(FS_INTRO_ENABLED_KEY) !== "0";
+}
+function loadFsIntroLang(): FsIntroLang {
+  return localStorage.getItem(FS_INTRO_LANG_KEY) === "en" ? "en" : "ja";
+}
+
 function loadPct(c: PctSetting): number {
   const stored = localStorage.getItem(c.key);
   if (stored === null) return c.def;
@@ -327,6 +341,8 @@ export async function createEditor(
   let previewFillNotes = loadPreviewFillNotes();
   let useFlick = loadUseFlick();
   let snapMoveToGrid = loadSnapMove();
+  let fsIntroEnabled = loadFsIntroEnabled();
+  let fsIntroLang = loadFsIntroLang();
   let previewHoverLane: number | null = null;
   // Keyboard lane keys for live tap/hold entry — app-wide setting (not per-project).
   let laneKeys = loadLaneKeys();
@@ -859,7 +875,7 @@ export async function createEditor(
     class: "btn tool-btn",
     text: "⏵",
     title: "Play/pause (Space)",
-    onclick: () => player.toggle(),
+    onclick: () => togglePlayback(),
   });
   const timeDisplay = el("span", { class: "time-display", text: "0:00.000 / 0:00.000" });
 
@@ -1322,6 +1338,28 @@ export async function createEditor(
   const spawnTailControl = pctControl(SPAWN_TAIL_PCT, () => spawnTailPct, (v) => (spawnTailPct = v), "Spawn size — hold tail");
   const rippleControl = pctControl(RIPPLE_PCT, () => ripplePct, (v) => (ripplePct = v), "Landing ripple size (0 = off)");
 
+  const fsIntroEnabledInput = el("input", {
+    type: "checkbox",
+    checked: fsIntroEnabled,
+    onchange: () => {
+      fsIntroEnabled = fsIntroEnabledInput.checked;
+      localStorage.setItem(FS_INTRO_ENABLED_KEY, fsIntroEnabled ? "1" : "0");
+    },
+  });
+  const fsIntroLangSelect = el(
+    "select",
+    {
+      title: "Which names the song-info card shows",
+      onchange: () => {
+        fsIntroLang = fsIntroLangSelect.value === "en" ? "en" : "ja";
+        localStorage.setItem(FS_INTRO_LANG_KEY, fsIntroLang);
+      },
+    },
+    el("option", { value: "ja", text: "Japanese" }),
+    el("option", { value: "en", text: "English" }),
+  );
+  fsIntroLangSelect.value = fsIntroLang;
+
   const previewFullscreenModeSelect = el(
     "select",
     {
@@ -1391,6 +1429,18 @@ export async function createEditor(
           "seconds in it (not while a screen recorder is capturing the window) — if that bothers you, " +
           "pick Inside the app window.",
       }),
+      el(
+        "label",
+        { class: "row" },
+        fsIntroEnabledInput,
+        el("span", { text: "Show the jacket, title and artist when full-screen playback starts from the beginning" }),
+      ),
+      el(
+        "div",
+        { class: "row lane-keys-row" },
+        el("span", { class: "mini-label", text: "Title / artist names" }),
+        fsIntroLangSelect,
+      ),
       el("hr", { class: "dialog-sep" }),
       el("p", {
         class: "dialog-body",
@@ -1440,8 +1490,19 @@ export async function createEditor(
     title: "Exit full screen (Esc)",
     onclick: () => void exitPreviewFullscreen(),
   });
-  const fsHeader = el("div", { class: "preview-fs-header" }, fsControls, fsStrip, fsExitBtn);
-  const fsRoot = el("div", { class: "preview-fs" }, fsBg, fsHeader);
+  const fsRestartBtn = el("button", {
+    class: "btn tool-btn preview-fs-restart",
+    text: "⏮",
+    title: "Back to the start",
+    onclick: () => jumpToStart(),
+  });
+  const fsHeader = el("div", { class: "preview-fs-header" }, fsControls, fsRestartBtn, fsStrip, fsExitBtn);
+  // The song-info card: jacket, title, artist — centered, shown by showFsIntro().
+  const fsIntroImg = el("img", { class: "preview-fs-intro-jacket", alt: "" });
+  const fsIntroTitle = el("div", { class: "preview-fs-intro-title" });
+  const fsIntroArtist = el("div", { class: "preview-fs-intro-artist" });
+  const fsIntro = el("div", { class: "preview-fs-intro" }, fsIntroImg, fsIntroTitle, fsIntroArtist);
+  const fsRoot = el("div", { class: "preview-fs" }, fsBg, fsIntro, fsHeader);
   const fsBtn = el("button", {
     class: "btn preview-fs-btn",
     text: "⛶",
@@ -1473,6 +1534,77 @@ export async function createEditor(
     fsJacketUrl = null;
   }
 
+  /** How long the song-info card is up (matches its CSS animation), in seconds. */
+  const FS_INTRO_SEC = 2.5;
+  // Set while a from-the-start playback is waiting out the card.
+  let fsIntroTimer: number | null = null;
+
+  function syncPlayBtn(): void {
+    playBtn.textContent = player.playing || fsIntroTimer !== null ? "⏸" : "⏵";
+  }
+
+  /** Drops a playback that's still waiting for the card to finish — pressing play again,
+   *  leaving full screen, or closing the editor all mean "not after all". */
+  function cancelFsIntroWait(): void {
+    if (fsIntroTimer === null) return;
+    window.clearTimeout(fsIntroTimer);
+    fsIntroTimer = null;
+    fsIntro.classList.remove("show");
+    syncPlayBtn();
+  }
+
+  /** Starts playback. From the very start in full screen with the song-info card switched
+   *  on, the card goes first and the music begins once it has faded out. */
+  function startPlayback(): void {
+    if (player.playing || fsIntroTimer !== null) return;
+    if (fsActive && fsIntroEnabled && player.time < 0.25) {
+      showFsIntro();
+      fsIntroTimer = window.setTimeout(() => {
+        fsIntroTimer = null;
+        player.play();
+      }, FS_INTRO_SEC * 1000);
+      syncPlayBtn();
+      return;
+    }
+    player.play();
+  }
+
+  function togglePlayback(): void {
+    if (fsIntroTimer !== null) cancelFsIntroWait();
+    else if (player.playing) player.pause();
+    else startPlayback();
+  }
+
+  /** Back to the very start — what Home does. Mid-playback in full screen with the card
+   *  on, that's a fresh playback from the beginning: stop, and let startPlayback run the
+   *  card before the music comes back. */
+  function jumpToStart(): void {
+    const restartWithCard = player.playing && fsActive && fsIntroEnabled;
+    if (restartWithCard) player.pause();
+    player.seek(0);
+    scroll = -0.5;
+    requestDraw();
+    if (restartWithCard) startPlayback();
+  }
+
+  /** Fades the song-info card (jacket, title, artist) in at the center and back out, by
+   *  restarting its CSS animation. Full screen only, and only if it's switched on. */
+  function showFsIntro(): void {
+    if (!fsActive || !fsIntroEnabled) return;
+    const pick = (ja: string, en: string): string => (fsIntroLang === "en" ? en || ja : ja || en);
+    fsIntroTitle.textContent = pick(manifest.name, manifest.name_en);
+    fsIntroArtist.textContent = pick(manifest.artist, manifest.artist_en);
+    if (fsJacketUrl) {
+      fsIntroImg.src = fsJacketUrl;
+      fsIntroImg.hidden = false;
+    } else {
+      fsIntroImg.hidden = true;
+    }
+    fsIntro.classList.remove("show");
+    void fsIntro.offsetWidth; // force a reflow so adding the class restarts the animation
+    fsIntro.classList.add("show");
+  }
+
   async function enterPreviewFullscreen(): Promise<void> {
     if (fsActive) return;
     fsActive = true;
@@ -1482,7 +1614,7 @@ export async function createEditor(
     if (bytes) fsJacketUrl = URL.createObjectURL(new Blob([bytes]));
     fsBg.style.backgroundImage = fsJacketUrl ? `url("${fsJacketUrl}")` : "none";
     fsControls.append(...playControls);
-    fsRoot.insertBefore(previewWrap, fsHeader);
+    fsRoot.insertBefore(previewWrap, fsIntro);
     document.body.append(fsRoot);
     previewRenderer.setFullscreen(true);
     previewHoverLane = null;
@@ -1514,6 +1646,8 @@ export async function createEditor(
     previewSongHoverPos = null;
     playGroup.prepend(...playControls);
     previewPanel.insertBefore(previewWrap, previewPanel.firstChild);
+    cancelFsIntroWait();
+    fsIntro.classList.remove("show");
     fsRoot.remove();
     releaseFsJacket();
     previewRenderer.resize();
@@ -1703,7 +1837,7 @@ export async function createEditor(
       ["Snap to grid button", "Pull near-grid notes/lengths exactly onto the grid"],
       ["Checkbox right of Snap to grid", "Moving notes lands the earliest selected note on the grid (rest keep their relative positions)"],
       ["Click/drag song density strip (preview)", "Seek — shows a time/measure tooltip"],
-      ["⛶ button (preview, top right) / F11", "Full-screen preview, laid out like the in-game screen — F11, Esc or ✕ to exit"],
+      ["⛶ button (preview, top right) / F11", "Full-screen preview, laid out like the in-game screen — F11, Esc or ✕ to exit; ⏮ in its header goes back to the start, and playing from the start shows the song's jacket, title and artist"],
       ["A S D F G H J K L", "Place a tap at the playhead, in lanes 9→1 left to right — works during playback; hold the key while playing to place a hold instead. Keys, input offset, and hold threshold all configurable in ⚙ Settings"],
     ];
     openDialog(
@@ -2669,7 +2803,7 @@ export async function createEditor(
 
     if (e.code === "Space") {
       e.preventDefault();
-      player.toggle();
+      togglePlayback();
       return;
     }
     if (ctrl && e.key.toLowerCase() === "z") {
@@ -2825,9 +2959,7 @@ export async function createEditor(
         updateStatus();
         break;
       case "Home":
-        player.seek(0);
-        scroll = -0.5;
-        requestDraw();
+        jumpToStart();
         break;
       case "End":
         player.seek(duration());
@@ -2935,7 +3067,7 @@ export async function createEditor(
   previewResizeObserver.observe(previewWrap);
 
   player.onstate = () => {
-    playBtn.textContent = player.playing ? "⏸" : "⏵";
+    syncPlayBtn();
     timeDisplay.textContent = `${fmtTime(player.time)} / ${fmtTime(player.duration)}`;
     requestDraw();
   };
@@ -2983,6 +3115,7 @@ export async function createEditor(
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
+      cancelFsIntroWait();
       if (fsActive) await exitPreviewFullscreen();
       resizeObserver.disconnect();
       previewResizeObserver.disconnect();
