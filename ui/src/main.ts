@@ -4,6 +4,9 @@ import { createConnectView } from "./views/connect.js";
 import { createLibraryView } from "./views/library.js";
 import { createEditor } from "./editor/editor.js";
 import { getCurrentWindow } from "./tauri.js";
+import { installSelectMenus } from "./selectMenu.js";
+
+installSelectMenus();
 
 const app = document.getElementById("app")!;
 
