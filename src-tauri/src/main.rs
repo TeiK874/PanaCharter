@@ -4,6 +4,7 @@ mod audio;
 mod audio_native;
 mod bandori_batch;
 mod bundle;
+mod open_url;
 mod projects;
 mod server;
 
@@ -86,6 +87,7 @@ fn main() {
             projects::project_export,
             projects::project_import_zip,
             bundle::bundle_extract_charts,
+            open_url::open_url,
             audio_native::native_available,
             audio_native::native_play,
             audio_native::native_pause,

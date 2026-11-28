@@ -482,3 +482,10 @@ kbd {
 .select-menu-item.active { background: var(--bg-2); }
 .select-menu-item.selected { color: var(--pink); font-weight: 650; }
 .select-menu-item.disabled { opacity: 0.45; cursor: default; }
+
+/* ---- About dialog (about.ts) ---- */
+.topbar-about { font-size: 16px; padding: 4px 9px; }
+.about-name { font-size: 18px; font-weight: 750; margin-bottom: 4px; }
+.about-head { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: 0.04em; margin: 14px 0 2px; }
+.about-link { color: var(--pink); text-decoration: underline; cursor: pointer; word-break: break-all; }
+.about-link:hover { filter: brightness(1.2); }

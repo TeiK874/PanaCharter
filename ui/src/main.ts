@@ -5,6 +5,7 @@ import { createLibraryView } from "./views/library.js";
 import { createEditor } from "./editor/editor.js";
 import { getCurrentWindow } from "./tauri.js";
 import { installSelectMenus } from "./selectMenu.js";
+import { openAbout } from "./about.js";
 
 installSelectMenus();
 
@@ -99,6 +100,12 @@ const topbar = el(
   topbarTitleBtn,
   el("span", { class: "spacer" }),
   serverChip,
+  el("button", {
+    class: "btn btn-ghost topbar-about",
+    text: "ⓘ",
+    title: "About PanaCharter — version, download page and credits",
+    onclick: () => void openAbout(),
+  }),
 );
 
 // --- routing -------------------------------------------------------------------
