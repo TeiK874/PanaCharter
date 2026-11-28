@@ -306,7 +306,9 @@ export class ChartDoc {
     return this.notes.length;
   }
 
-  issues(audioDuration: number): ChartIssue[] {
+  /** `sameLaneSlides`: when true, slide points that share a lane back to back aren't flagged —
+   *  charts that use flicks have those on purpose. */
+  issues(audioDuration: number, opts: { sameLaneSlides?: boolean } = {}): ChartIssue[] {
     const out: ChartIssue[] = [];
     const sorted = [...this.notes].sort((a, b) => a.t - b.t);
     const byLane = new Map<number, Note[]>();
@@ -386,7 +388,7 @@ export class ChartDoc {
       }
       const ordered = [...group].sort((a, b) => a.t - b.t);
       for (let i = 0; i < ordered.length - 1; i++) {
-        if (ordered[i].lane === ordered[i + 1].lane) {
+        if (!opts.sameLaneSlides && ordered[i].lane === ordered[i + 1].lane) {
           out.push({
             message: `Slide chain: points at ${ordered[i].t.toFixed(3)}s and ${ordered[i + 1].t.toFixed(3)}s share lane ${ordered[i].lane} and won't connect`,
             severity: "warning",

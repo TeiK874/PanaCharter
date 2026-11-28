@@ -992,6 +992,7 @@ export async function createEditor(
       useFlick = flickUseInput.checked;
       localStorage.setItem(USE_FLICK_KEY, useFlick ? "1" : "0");
       syncFlickTool();
+      updateStatus(); // the issue count depends on this setting
     },
   });
   const flickUseLabel = el(
@@ -999,6 +1000,11 @@ export async function createEditor(
     { class: "flick-use", title: "Use flick notes — enables the Flick tool, flick releases for holds/slides, and tap → star → flick" },
     flickUseInput,
   );
+  /** Chart-check options that depend on the flick setting: with flicks in use, slide points
+   *  back to back in one lane are intentional and not worth a warning. */
+  function issueOpts(): { sameLaneSlides: boolean } {
+    return { sameLaneSlides: useFlick };
+  }
   function syncFlickTool(): void {
     const btn = toolButtons.get("flick");
     if (btn) btn.disabled = !useFlick;
@@ -1825,7 +1831,7 @@ export async function createEditor(
     saveSpan.textContent = saveState;
     saveSpan.className = `save-state ${saveState === "saved" ? "saved" : "dirty"}`;
     selSpan.textContent = doc().selection.size ? `sel ${doc().selection.size}` : "";
-    const issues = doc().issues(player.loaded ? player.duration : 0);
+    const issues = doc().issues(player.loaded ? player.duration : 0, issueOpts());
     const errors = issues.filter((i) => i.severity === "error").length;
     issuesSpan.textContent = issues.length
       ? `⚠ ${issues.length} issue${issues.length > 1 ? "s" : ""}`
@@ -1861,7 +1867,7 @@ export async function createEditor(
   }
 
   function showIssues(): void {
-    const issues = doc().issues(player.loaded ? player.duration : 0);
+    const issues = doc().issues(player.loaded ? player.duration : 0, issueOpts());
     openDialog(
       `${DIFFICULTIES[level].name} — chart issues`,
       issues.length
@@ -2290,7 +2296,7 @@ export async function createEditor(
     const audioDur = player.loaded ? player.duration : 0;
     const errors = [...docs.entries()].flatMap(([lvl, d]) =>
       d.notes.length
-        ? d.issues(audioDur)
+        ? d.issues(audioDur, issueOpts())
             .filter((i) => i.severity === "error")
             .map((i) => `${DIFFICULTIES[lvl].short}: ${i.message}`)
         : [],
