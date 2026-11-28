@@ -5,7 +5,7 @@
 PanaCharter is a desktop editor for creating custom song beatmaps. This guide
 covers how to use the app: connecting to a server, creating a project, and
 placing notes. It does not cover building the app from source.
-(This guide is for version 1.0.0.)
+(This guide is for version 1.1.0.)
 
 --------------------------------------------------------------------------------
 1. Getting started
@@ -90,7 +90,9 @@ Other editing actions:
   - Delete/Backspace removes the selection.
   - Ctrl+Z / Ctrl+Y undo and redo.
   - Ctrl+C / Ctrl+X / Ctrl+V copy / cut / paste at the playhead;
-    Ctrl+Shift+V pastes mirrored left-right.
+    Ctrl+Shift+V pastes mirrored left-right. Notes that would land after the
+    end of the song are not pasted, and a hold running past the end is cut
+    off at the last grid line inside the song.
   - Ctrl+A selects every note in the current difficulty.
 
 Flick notes are off by default, since ordinary charts don't use them. Tick
@@ -167,9 +169,11 @@ game, with a live combo counter above it. Below that:
     click or drag it to jump to that point (a tooltip shows the time and
     measure number), and the main editor view scrolls to follow.
 
-Notes are drawn as outlines by default, star notes carry a ☆ mark, a ripple
-spreads where a note lands on its judgment circle, a pink ring marks the
-spawn point, and the song's jacket shows dimmed behind the panel.
+Notes are drawn as outlines by default, star notes carry a white star, flick
+notes are triangles pointing back at the spawn point, a ripple spreads where
+a note lands on its judgment circle, a pink ring marks the spawn point, and
+the song's jacket shows dimmed behind the panel. Notes that are judged at the
+same moment are marked with a short white bar.
 
 Drag the panel's right edge to resize it. Its size, speed, and width are all
 remembered for next time.
@@ -188,7 +192,10 @@ Preview options (in "Settings")
   - Speed: the game speed (1-10), or the time a note takes to fly in,
     directly in seconds.
   - Size: the preview's display size.
-  - Fill notes: draw notes filled in instead of as outlines.
+  - Note style: draw notes as outlines (the default) or filled in.
+  - Note colors: color notes by their own type (the default), or by the
+    song's attribute - Smile uses the tap color, Pure the hold color, Cool
+    the slide color. Flick notes stay purple.
   - Spawn size: how large notes (and hold tails) are at the moment they
     appear. 0% grows them from nothing.
   - Landing ripple size: the size of the ripple (0 turns it off).
@@ -234,6 +241,14 @@ Need the full list of shortcuts?
 Press the "?" button in the editor's toolbar at any time for the complete,
 up-to-date list of keyboard and mouse shortcuts.
 
+--------------------------------------------------------------------------------
+Version and credits
+--------------------------------------------------------------------------------
+
+The "i" button at the top right of the window opens the About dialog: the
+version you are running, links to the download page and the source
+repository, and the credits.
+
 
 ================================================================================
  PanaCharter - 使い方ガイド
@@ -242,7 +257,7 @@ up-to-date list of keyboard and mouse shortcuts.
 PanaCharterは、カスタム楽曲の譜面を作成するためのデスクトップ用エディタです。この
 ガイドでは、サーバーへの接続、プロジェクトの作成、ノーツの配置方法など、アプ
 リの操作方法を説明します。ソースからのビルド方法は扱いません。
-(このガイドはバージョン1.0.0向けです。)
+(このガイドはバージョン1.1.0向けです。)
 
 --------------------------------------------------------------------------------
 1. はじめに
@@ -329,7 +344,9 @@ Projectsタブからは、次の操作ができます。
   - Delete/Backspaceで選択を削除。
   - Ctrl+Z / Ctrl+Yで元に戻す/やり直す。
   - Ctrl+C / Ctrl+X / Ctrl+Vで再生位置へコピー/切り取り/貼り付け。
-    Ctrl+Shift+Vで左右反転して貼り付け。
+    Ctrl+Shift+Vで左右反転して貼り付け。曲の終わりより後ろになるノーツは貼
+    り付けられません。曲の終わりを越えるホールドは、曲内の最後のグリッド
+    線で切り詰められます。
   - Ctrl+Aで現在の難易度の全ノーツを選択。
 
 フリックノーツは、通常の譜面では使わないため、初期状態では無効です。ツールバ
@@ -406,9 +423,11 @@ Projectsタブからは、次の操作ができます。
 
 があります。
 
-ノーツは初期状態では枠線のみで描かれ、スターノーツには☆印が入ります。ノーツ
-が判定サークルに重なると波紋が広がり、発生点はピンクの円で示され、パネルの
-背景には暗くしたジャケットが表示されます。
+ノーツは初期状態では枠線のみで描かれ、スターノーツには白い星が入り、フリッ
+クノーツは射出点の方向に頂点を向けた三角形で表示されます。ノーツが判定サー
+クルに重なると波紋が広がり、発生点はピンクの円で示され、パネルの背景には暗
+くしたジャケットが表示されます。同じ瞬間に判定されるノーツには、短い白い線
+が付きます。
 
 パネルの右端をドラッグするとサイズを変更できます。表示サイズ・速度・幅は、い
 ずれも次回起動時にも引き継がれます。
@@ -426,7 +445,10 @@ Projectsタブからは、次の操作ができます。
   - Speed: ゲームスピード(1〜10)、または、ノーツが飛んでくるまでの時間を
     秒で直接指定。
   - Size: プレビューの表示サイズ。
-  - Fill notes: ノーツを枠線ではなく塗りつぶして描く。
+  - Note style: ノーツを枠線で描く(初期設定)か、塗りつぶして描くか。
+  - Note colors: ノーツの種類ごとの色(初期設定)で描くか、曲の属性の色で描
+    くか。Smileはタップノーツ、Pureはホールドノーツ、Coolはスライドノーツ
+    の色になります。フリックノーツは紫のままです。
   - Spawn size: ノーツ(とホールドの終端)が現れる瞬間の大きさ。0%だと、何
     もない状態から大きくなっていきます。
   - Landing ripple size: 波紋の大きさ(0でオフ)。
@@ -470,3 +492,11 @@ Projectsタブからは、次の操作ができます。
 
 エディタのツールバーにある「？」ボタンを押すと、いつでも最新のキーボード/
 マウスショートカット一覧を確認できます。
+
+--------------------------------------------------------------------------------
+バージョンとクレジット
+--------------------------------------------------------------------------------
+
+ウィンドウ右上の「i」ボタンで、Aboutダイアログが開きます。使用中のバージョ
+ン、配布ページとソースコードのリポジトリへのリンク、クレジットを確認できま
+す。

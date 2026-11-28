@@ -6,6 +6,31 @@ Versions up to 20261002 were numbered by date. From 1.0.0 on, versions are
 numbered MAJOR.MINOR.PATCH.
 
 --------------------------------------------------------------------------------
+Version 1.1.0
+--------------------------------------------------------------------------------
+  - Added an About dialog (the "i" button at the top right) showing the
+    version, links to the download page and the source repository, and
+    credits.
+  - Added a "Note colors" setting: the preview can color notes by the song's
+    attribute (Smile uses the tap color, Pure the hold color, Cool the slide
+    color) instead of by note type. Flick notes stay purple.
+  - "Fill notes" in Settings is now a "Note style" dropdown (Outline /
+    Filled).
+  - Flick notes in the preview are now triangles pointing at the spawn
+    point.
+  - Made the preview easier to read: the simultaneous-note mark is a thin
+    white line with a black edge in every style, star notes show a white star
+    with a yellow outline and black edges, and slide arrows have a black
+    edge.
+  - Pasting no longer places notes that would start after the end of the
+    song, and a hold that would run past the end is cut off at the last grid
+    line inside the song (once the song's audio is loaded).
+  - With flick notes turned on, the chart check no longer warns about slide
+    points that follow one another in the same lane.
+  - Fixed the dropdown lists (in the toolbar and in Settings) not opening on
+    Windows.
+
+--------------------------------------------------------------------------------
 Version 1.0.0
 --------------------------------------------------------------------------------
   - Added a full-screen preview (the button at the preview's top right, or
@@ -121,6 +146,29 @@ Version 20260827
 
 20261002までのバージョンは日付で採番していました。1.0.0以降は「メジャー.マイナー.
 パッチ」形式で採番します。
+
+--------------------------------------------------------------------------------
+バージョン 1.1.0
+--------------------------------------------------------------------------------
+  - 「About」ダイアログを追加(右上の「i」ボタン)。バージョン、配布ページと
+    ソースコードのリポジトリへのリンク、クレジットを表示します。
+  - 「Note colors」設定を追加。プレビューで、ノーツの種類ごとの色ではなく、
+    曲の属性の色で表示できます(Smileはタップノーツ、Pureはホールドノーツ、
+    Coolはスライドノーツの色)。フリックノーツは紫のままです。
+  - 「Settings」の「Fill notes」を、「Note style」のドロップダウン(Outline /
+    Filled)に変更。
+  - プレビューのフリックノーツを、射出点の方向に頂点を向けた三角形で表示す
+    るように変更。
+  - プレビューを見やすく変更: 同時押しの線をすべての表示形式で黒い縁取りの
+    付いた細い白線にし、スターノーツは黄色の輪郭と黒い枠線の付いた白い星に、
+    スライドの矢印には黒い枠線を付けました。
+  - ペースト時に、曲の長さより後ろから始まるノーツは貼り付けないように変更。
+    曲の終わりを越えるホールドは、曲内の最後のグリッド線で切り詰めます(曲
+    の音源を読み込んでいる場合)。
+  - フリックノーツを有効にしているときは、同じレーンに連続するスライドの点
+    について、譜面チェックで警告を出さないように変更。
+  - Windowsで、ドロップダウン(ツールバーと「Settings」内)の選択肢が開かな
+    い不具合を修正。
 
 --------------------------------------------------------------------------------
 バージョン 1.0.0

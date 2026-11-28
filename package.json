@@ -1,7 +1,7 @@
 {
   "name": "panacharter",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "build": "tsc && node -e \"const fs=require('fs');fs.mkdirSync('ui/dist',{recursive:true});for(const f of ['index.html','styles.css'])fs.copyFileSync('ui/'+f,'ui/dist/'+f);fs.cpSync('ui/assets','ui/dist/assets',{recursive:true})\"",
