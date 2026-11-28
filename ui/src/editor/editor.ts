@@ -149,6 +149,16 @@ function loadPreviewFillNotes(): boolean {
   return localStorage.getItem(PREVIEW_FILL_KEY) === "1";
 }
 
+// What the preview colors its notes by: each note's own type (the default), or the song's
+// attribute - Smile in the tap color, Pure in the hold color, Cool in the slide color (flicks
+// stay purple either way). App-wide.
+const PREVIEW_COLOR_KEY = "charter.previewColorMode";
+type PreviewColorMode = "type" | "attribute";
+
+function loadPreviewColorMode(): PreviewColorMode {
+  return localStorage.getItem(PREVIEW_COLOR_KEY) === "attribute" ? "attribute" : "type";
+}
+
 // Whether flick notes are in use at all — the flick tool, flicking a hold's or slide's
 // release, and tap -> star -> flick cycling. Off by default: ordinary charts don't use
 // them. App-wide.
@@ -350,6 +360,7 @@ export async function createEditor(
   let spawnTailPct = loadPct(SPAWN_TAIL_PCT);
   let ripplePct = loadPct(RIPPLE_PCT);
   let previewFillNotes = loadPreviewFillNotes();
+  let previewColorMode = loadPreviewColorMode();
   let useFlick = loadUseFlick();
   let snapMoveToGrid = loadSnapMove();
   let fsIntroEnabled = loadFsIntroEnabled();
@@ -1383,15 +1394,34 @@ export async function createEditor(
       el("span", { class: "mini-label", text: "%" }),
     );
   }
-  const fillNotesInput = el("input", {
-    type: "checkbox",
-    checked: previewFillNotes,
-    onchange: () => {
-      previewFillNotes = fillNotesInput.checked;
-      localStorage.setItem(PREVIEW_FILL_KEY, previewFillNotes ? "1" : "0");
-      requestDraw();
+  const noteStyleSelect = el(
+    "select",
+    {
+      title: "How the preview draws notes",
+      onchange: () => {
+        previewFillNotes = noteStyleSelect.value === "fill";
+        localStorage.setItem(PREVIEW_FILL_KEY, previewFillNotes ? "1" : "0");
+        requestDraw();
+      },
     },
-  });
+    el("option", { value: "outline", text: "Outline" }),
+    el("option", { value: "fill", text: "Filled" }),
+  );
+  noteStyleSelect.value = previewFillNotes ? "fill" : "outline";
+  const previewColorModeSelect = el(
+    "select",
+    {
+      title: "What the preview colors notes by",
+      onchange: () => {
+        previewColorMode = previewColorModeSelect.value === "attribute" ? "attribute" : "type";
+        localStorage.setItem(PREVIEW_COLOR_KEY, previewColorMode);
+        requestDraw();
+      },
+    },
+    el("option", { value: "type", text: "Note type" }),
+    el("option", { value: "attribute", text: "Song attribute (Smile / Pure / Cool)" }),
+  );
+  previewColorModeSelect.value = previewColorMode;
   const spawnHeadControl = pctControl(SPAWN_HEAD_PCT, () => spawnHeadPct, (v) => (spawnHeadPct = v), "Spawn size — note / hold head");
   const spawnTailControl = pctControl(SPAWN_TAIL_PCT, () => spawnTailPct, (v) => (spawnTailPct = v), "Spawn size — hold tail");
   const rippleControl = pctControl(RIPPLE_PCT, () => ripplePct, (v) => (ripplePct = v), "Landing ripple size (0 = off)");
@@ -1539,7 +1569,18 @@ export async function createEditor(
         previewSizeInput,
         el("span", { class: "mini-label", text: "%" }),
       ),
-      el("label", { class: "row" }, fillNotesInput, el("span", { text: "Fill notes (off = outlines only)" })),
+      el(
+        "div",
+        { class: "row lane-keys-row" },
+        el("span", { class: "mini-label", text: "Note style" }),
+        noteStyleSelect,
+      ),
+      el(
+        "div",
+        { class: "row lane-keys-row" },
+        el("span", { class: "mini-label", text: "Note colors" }),
+        previewColorModeSelect,
+      ),
       spawnHeadControl,
       spawnTailControl,
       rippleControl,
@@ -3167,6 +3208,8 @@ export async function createEditor(
       spawnScaleTail: spawnTailPct / 100,
       rippleScale: ripplePct / 100,
       fillNotes: previewFillNotes,
+      colorByAttribute: previewColorMode === "attribute",
+      attribute: manifest.attribute,
     });
     requestAnimationFrame(frame);
   }

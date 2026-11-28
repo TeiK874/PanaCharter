@@ -42,11 +42,18 @@ export interface PreviewState {
   rippleScale: number;
   /** Fill notes with their bright color (true), or draw them as outlines in it (false). */
   fillNotes: boolean;
+  /** Color the notes by the song's attribute (Smile: the tap color, Pure: the hold color,
+   *  Cool: the slide color) instead of by each note's own type. Flicks stay purple. */
+  colorByAttribute: boolean;
+  /** The song's attribute: 1 Smile, 2 Pure, 3 Cool. Only read when colorByAttribute is on. */
+  attribute: number;
 }
 
 const LANES = 9;
 /** Hold ribbon width at the judgment position, as a fraction of a judgment circle's diameter. */
 const RIBBON_WIDTH_RATIO = 0.95;
+/** A flick marker is a triangle whose corners sit at this multiple of the circle's radius. */
+const FLICK_TRIANGLE_RATIO = 1.3;
 /** How long, in seconds, the ripple after a note reaches its judgment position lasts. */
 const RIPPLE_SEC = 0.45;
 /** Judgment-position radius as a fraction of the fan radius (spawn-to-judgment distance)
@@ -90,11 +97,19 @@ const COLORS = {
   holdBody: "rgba(111, 217, 139, 0.35)",
   star: "#ffcf5e",
   starRim: "#c69a2e",
+  /** The star inside a star note: white inside, bright yellow ring, black edges. The same
+   *  black edges the slide arrow gets. */
+  starFill: "#ffffff",
+  starBright: "#ffe566",
+  starEdge: "#000000",
   slide: "#4ea8ff",
   slideRim: "#2b6fb8",
   slideBody: "rgba(78, 168, 255, 0.35)",
   flick: "#b48cff",
   flickRim: "#7c56c9",
+  /** The simultaneous-note mark: white with a thin black edge, whether notes are filled or not. */
+  sim: "#ffffff",
+  simEdge: "#000000",
   label: "#77748f",
   labelStrong: "#eceaf4",
   density: "#62b1ff",
@@ -122,6 +137,14 @@ function colorFor(kind: NoteKind): readonly [string, string, string] {
     default:
       return [COLORS.tap, COLORS.tapRim, COLORS.tapRim] as const;
   }
+}
+
+/** The colors a note's circle, ring and ribbon are drawn in: its own type's, or - in
+ *  attribute mode - the song attribute's (Smile = the tap colors, Pure = the hold colors,
+ *  Cool = the slide colors). A flick is always its own purple. */
+function bodyColorsFor(kind: NoteKind, byAttribute: boolean, attribute: number): readonly [string, string, string] {
+  if (!byAttribute || kind === "flick") return colorFor(kind);
+  return colorFor(attribute === 2 ? "hold" : attribute === 3 ? "slide" : "tap");
 }
 
 /** 0 (spawn) -> 1 (arrival), starting from `spawnScale` and growing in proportion to
@@ -428,17 +451,26 @@ export class NotePreviewRenderer {
       const headProgress = Math.min(1, Math.max(0, 1 - untilHit / s.approachSec));
       const headPos = this.lerp(spawn, judge, headProgress);
       const headRadius = judgeRadius * noteScale(headProgress, s.spawnScaleHead);
-      const [fill, rim, body] = colorFor(n.kind);
+      const [fill, rim, body] = bodyColorsFor(n.kind, s.colorByAttribute, s.attribute);
       // flickEnd marks the RELEASE as a flick — a hold's head (dur > 0) stays hold-colored
-      // and only its tail marker below turns flick-blue; a flick-ended slide chain has no
+      // and only its tail marker below turns flick-purple; a flick-ended slide chain has no
       // duration of its own, so its tail IS this note's head circle and that's what has to
-      // turn flick-blue instead.
+      // turn flick-purple instead. Flick markers are triangles pointing back at the spawn
+      // point (the lane line, the same from spawn to judgment).
+      const headIsFlick = n.kind === "flick" || (n.dur === 0 && !!n.flickEnd);
+      const tailIsFlick = n.dur > 0 && !!n.flickEnd;
+      const towardSpawn = Math.atan2(spawn.y - judge.y, spawn.x - judge.x);
       const [tailFill, tailRim] = n.flickEnd ? [COLORS.flick, COLORS.flickRim] : [fill, rim];
       const [headFill, headRim] = n.dur === 0 && n.flickEnd ? [COLORS.flick, COLORS.flickRim] : [fill, rim];
       // Filled notes are the bright color with a darker rim, marks drawn in the rim color;
       // unfilled ones are just a ring in the bright color, marks in it too.
       const headInk = s.fillNotes ? headRim : headFill;
       const tailInk = s.fillNotes ? tailRim : tailFill;
+      // The symbols inside a note (star, slide arrow) always take the color of the note's own
+      // type, even when the circle itself is colored by the song attribute.
+      const [kindFill, kindRim] = colorFor(n.kind);
+      const [markFill, markRim] = n.dur === 0 && n.flickEnd ? [COLORS.flick, COLORS.flickRim] : [kindFill, kindRim];
+      const markInk = s.fillNotes ? markRim : markFill;
 
       if (n.dur > 0) {
         const tailUntil = n.t + n.dur - s.now;
@@ -470,8 +502,7 @@ export class NotePreviewRenderer {
         ctx.fill();
 
         // Tail marker (the release point).
-        ctx.beginPath();
-        ctx.arc(tailPos.x, tailPos.y, tailRadius, 0, Math.PI * 2);
+        this.markerPath(tailPos, tailRadius, tailIsFlick, towardSpawn);
         if (s.fillNotes) {
           ctx.fillStyle = tailFill;
           ctx.fill();
@@ -480,19 +511,10 @@ export class NotePreviewRenderer {
         ctx.strokeStyle = tailInk;
         ctx.stroke();
 
-        if (simTails.has(n.id)) {
-          ctx.beginPath();
-          ctx.moveTo(tailPos.x - tailRadius * 0.6, tailPos.y);
-          ctx.lineTo(tailPos.x + tailRadius * 0.6, tailPos.y);
-          ctx.strokeStyle = tailInk;
-          ctx.lineWidth = Math.max(1.5, tailRadius * 0.4);
-          ctx.lineCap = "round";
-          ctx.stroke();
-        }
+        if (simTails.has(n.id)) this.drawSimMark(tailPos, tailRadius);
       }
 
-      ctx.beginPath();
-      ctx.arc(headPos.x, headPos.y, headRadius, 0, Math.PI * 2);
+      this.markerPath(headPos, headRadius, headIsFlick, towardSpawn);
       if (s.fillNotes) {
         ctx.fillStyle = headFill;
         ctx.fill();
@@ -501,7 +523,8 @@ export class NotePreviewRenderer {
       ctx.strokeStyle = headInk;
       ctx.stroke();
 
-      // A star note carries a star outline in its middle.
+      // A star note carries a star in its middle: white, with a bright yellow outline and a
+      // black edge on both sides of that outline, so it reads on any note color.
       if (n.kind === "star") {
         const outer = headRadius * 0.56;
         const inner = outer * 0.42;
@@ -515,9 +538,17 @@ export class NotePreviewRenderer {
           else ctx.lineTo(x, y);
         }
         ctx.closePath();
-        ctx.strokeStyle = headInk;
-        ctx.lineWidth = Math.max(1.2, headRadius * 0.12);
+        const starWidth = Math.max(1.2, headRadius * 0.12);
         ctx.lineJoin = "round";
+        const edge = Math.max(0.75, starWidth * 0.35);
+        ctx.fillStyle = COLORS.starFill;
+        ctx.fill();
+        // a black stroke wider than the yellow ring shows as an edge on both sides of it
+        ctx.strokeStyle = COLORS.starEdge;
+        ctx.lineWidth = starWidth + edge * 2;
+        ctx.stroke();
+        ctx.strokeStyle = COLORS.starBright;
+        ctx.lineWidth = starWidth;
         ctx.stroke();
       }
 
@@ -533,25 +564,24 @@ export class NotePreviewRenderer {
         ctx.moveTo(-headRadius * 0.4, -headRadius * 0.55);
         ctx.lineTo(headRadius * 0.35, 0);
         ctx.lineTo(-headRadius * 0.4, headRadius * 0.55);
-        ctx.strokeStyle = headInk;
-        ctx.lineWidth = Math.max(1.5, headRadius * 0.4);
+        // a black edge around the arrow, like the star's, so it reads on any note color
+        const arrowWidth = Math.max(1.5, headRadius * 0.4);
+        ctx.strokeStyle = COLORS.starEdge;
+        ctx.lineWidth = arrowWidth + Math.max(0.75, headRadius * 0.05) * 2;
+        ctx.stroke();
+        ctx.strokeStyle = markInk;
+        ctx.lineWidth = arrowWidth;
         ctx.stroke();
         ctx.restore();
       }
 
       // Simultaneous-note mark, overlaid on top of the circle like the slide arrow above.
-      if (simHeads.has(n.id)) {
-        ctx.beginPath();
-        ctx.moveTo(headPos.x - headRadius * 0.6, headPos.y);
-        ctx.lineTo(headPos.x + headRadius * 0.6, headPos.y);
-        ctx.strokeStyle = headInk;
-        ctx.lineWidth = Math.max(1.5, headRadius * 0.4);
-        ctx.lineCap = "round";
-        ctx.stroke();
-      }
+      if (simHeads.has(n.id)) this.drawSimMark(headPos, headRadius);
     }
 
-    this.drawRipples(s.notes, s.now, judgePositions, judgeRadius, s.rippleScale);
+    this.drawRipples(s.notes, s.now, judgePositions, judgeRadius, s.rippleScale, (n) =>
+      bodyColorsFor(n.kind, s.colorByAttribute, s.attribute)[0],
+    );
 
     if (this.fullscreen) {
       this.drawFullscreenHud(s);
@@ -579,11 +609,57 @@ export class NotePreviewRenderer {
     if (s.hoverLane !== null) this.drawLaneTooltip(s.notes, s.hoverLane, layout.laneTop);
   }
 
+  /** The simultaneous-note mark: a short horizontal bar across a marker - white, with a thin
+   *  black edge so it reads on any note color (filled or not, whatever the jacket behind it). */
+  private drawSimMark(pos: Point, radius: number): void {
+    const { ctx } = this;
+    const width = Math.max(1, radius * 0.2);
+    const edge = Math.max(0.75, width * 0.15);
+    ctx.beginPath();
+    ctx.moveTo(pos.x - radius * 0.6, pos.y);
+    ctx.lineTo(pos.x + radius * 0.6, pos.y);
+    ctx.lineCap = "round";
+    ctx.strokeStyle = COLORS.simEdge;
+    ctx.lineWidth = width + edge * 2;
+    ctx.stroke();
+    ctx.strokeStyle = COLORS.sim;
+    ctx.lineWidth = width;
+    ctx.stroke();
+  }
+
+  /** The path of a note marker at `pos`: a circle, or - for a flick - a triangle with its tip
+   *  pointing at angle `towardSpawn` (back along the lane toward the spawn point). */
+  private markerPath(pos: Point, radius: number, flick: boolean, towardSpawn: number): void {
+    const { ctx } = this;
+    ctx.beginPath();
+    if (!flick) {
+      ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+      return;
+    }
+    const r = radius * FLICK_TRIANGLE_RATIO;
+    for (let i = 0; i < 3; i++) {
+      const a = towardSpawn + (i * 2 * Math.PI) / 3;
+      const x = pos.x + r * Math.cos(a);
+      const y = pos.y + r * Math.sin(a);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.lineJoin = "round";
+  }
+
   /** A ripple at a judgment position for a moment after a note lands on it: two rings
    *  spreading out from the circle's rim and fading. A hold lands twice — its head, and its
    *  release. Stateless like everything else here: it's a function of `now` against each
    *  note's own hit time, so scrubbing and replaying look the same as playing through. */
-  private drawRipples(notes: Note[], now: number, judgePositions: Point[], judgeRadius: number, rippleScale: number): void {
+  private drawRipples(
+    notes: Note[],
+    now: number,
+    judgePositions: Point[],
+    judgeRadius: number,
+    rippleScale: number,
+    bodyColor: (n: Note) => string,
+  ): void {
     const { ctx } = this;
     if (rippleScale <= 0) return;
     const size = judgeRadius * rippleScale;
@@ -592,8 +668,7 @@ export class NotePreviewRenderer {
       if (age < 0 || age >= RIPPLE_SEC) return;
       const judge = judgePositions[n.lane - 1];
       if (!judge) return;
-      const [fill, , ] = colorFor(n.kind);
-      const color = n.flickEnd && (tailOfHold || n.dur === 0) ? COLORS.flick : fill;
+      const color = n.flickEnd && (tailOfHold || n.dur === 0) ? COLORS.flick : bodyColor(n);
       const p = age / RIPPLE_SEC;
       for (let i = 0; i < 2; i++) {
         const q = p - i * 0.18; // the second ring trails the first
