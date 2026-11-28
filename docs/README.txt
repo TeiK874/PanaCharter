@@ -119,7 +119,7 @@ You can also place notes live, by playing along to the song on your
 keyboard:
 
   A S D F G H J K L   Each key places a tap note, at the playhead, in one
-                       of the 9 lanes (left to right = lanes 9 down to 1).
+                       of the 9 lanes (left to right = lanes 1 to 9).
                        This works even while the song is playing. Hold a
                        key down while the song plays to place a hold note
                        instead of a tap.
@@ -372,7 +372,7 @@ Projectsタブからは、次の操作ができます。
 キーボードを使い、曲に合わせてリアルタイムにノーツを配置することもできます。
 
   A S D F G H J K L   各キーを押すと、再生位置にそのレーン(左から順にレー
-                       ン9〜1)のタップノーツが配置されます。曲の再生中でも
+                       ン1〜9)のタップノーツが配置されます。曲の再生中でも
                        使用できます。再生中にキーを押し続けると、タップの
                        代わりにホールドノーツが配置されます。
 

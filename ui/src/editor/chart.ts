@@ -36,6 +36,13 @@ export interface ChartIssue {
 
 let nextId = 1;
 // 1 is SIF1's "not chained" default, so chain ids must start above it.
+/** The lane number shown to the user: 1-9 from left to right on screen. The stored lane
+ *  number (Note.lane, the chart files, the server) is the game's own and counts from the
+ *  right, so the leftmost lane is 9 there and 1 here. Display only - never store this. */
+export function displayLane(lane: number): number {
+  return 10 - lane;
+}
+
 let nextSlideId = 2;
 
 /** Allocates a fresh slide chain id, always > 1 so it never reads as "unchained". */
@@ -314,7 +321,7 @@ export class ChartDoc {
     const byLane = new Map<number, Note[]>();
     for (const n of sorted) {
       if (n.lane < 1 || n.lane > 9) {
-        out.push({ message: `Note at ${n.t.toFixed(3)}s: lane ${n.lane} is outside 1–9`, severity: "error", noteId: n.id });
+        out.push({ message: `Note at ${n.t.toFixed(3)}s: lane ${displayLane(n.lane)} is outside 1–9`, severity: "error", noteId: n.id });
       }
       if (n.t < 0) {
         out.push({ message: `Note at ${n.t.toFixed(3)}s is before the track start`, severity: "error", noteId: n.id });
@@ -338,13 +345,13 @@ export class ChartDoc {
           const next = list[j];
           if (next.t < end - EPS) {
             out.push({
-              message: `Lane ${lane}: note at ${next.t.toFixed(3)}s lands inside the hold starting at ${cur.t.toFixed(3)}s`,
+              message: `Lane ${displayLane(lane)}: note at ${next.t.toFixed(3)}s lands inside the hold starting at ${cur.t.toFixed(3)}s`,
               severity: "warning",
               noteId: next.id,
             });
           } else {
             out.push({
-              message: `Lane ${lane}: note at ${next.t.toFixed(3)}s sits exactly on a hold's tail — this crashes the game; leave a gap`,
+              message: `Lane ${displayLane(lane)}: note at ${next.t.toFixed(3)}s sits exactly on a hold's tail — this crashes the game; leave a gap`,
               severity: "error",
               noteId: next.id,
             });
@@ -358,7 +365,7 @@ export class ChartDoc {
         const b = list[i + 1];
         if (Math.abs(a.t - b.t) < EPS) {
           out.push({
-            message: `Lane ${lane}: two notes share the exact time ${a.t.toFixed(3)}s${
+            message: `Lane ${displayLane(lane)}: two notes share the exact time ${a.t.toFixed(3)}s${
               a.kind !== b.kind ? " with different kinds — the server rejects this" : " (stacked notes)"
             }`,
             severity: a.kind !== b.kind ? "error" : "warning",
@@ -390,7 +397,7 @@ export class ChartDoc {
       for (let i = 0; i < ordered.length - 1; i++) {
         if (!opts.sameLaneSlides && ordered[i].lane === ordered[i + 1].lane) {
           out.push({
-            message: `Slide chain: points at ${ordered[i].t.toFixed(3)}s and ${ordered[i + 1].t.toFixed(3)}s share lane ${ordered[i].lane} and won't connect`,
+            message: `Slide chain: points at ${ordered[i].t.toFixed(3)}s and ${ordered[i + 1].t.toFixed(3)}s share lane ${displayLane(ordered[i].lane)} and won't connect`,
             severity: "warning",
             noteId: ordered[i + 1].id,
           });

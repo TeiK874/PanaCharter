@@ -1,3 +1,4 @@
+import { displayLane } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
 import { gridStepSec } from "./tempo.js";
 
@@ -740,9 +741,9 @@ export class Renderer {
     for (let idx = 0; idx < 9; idx++) {
       const lane = o === "vertical" ? 9 - idx : idx + 1;
       if (o === "vertical") {
-        ctx.fillText(String(lane), GUTTER + (idx + 0.5) * band - 3, 14);
+        ctx.fillText(String(displayLane(lane)), GUTTER + (idx + 0.5) * band - 3, 14);
       } else {
-        ctx.fillText(String(lane), GUTTER - 16, GUTTER + (idx + 0.5) * band + 4);
+        ctx.fillText(String(displayLane(lane)), GUTTER - 16, GUTTER + (idx + 0.5) * band + 4);
       }
     }
   }

@@ -2,6 +2,7 @@
 // same distance from a top-center spawn point (lane 1/9 sitting level with it, either
 // side), with notes flying out from the spawn point and growing to full size as they
 // arrive.
+import { displayLane } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
 
 export interface PreviewState {
@@ -852,7 +853,7 @@ export class NotePreviewRenderer {
     return Math.min(this.songMeasureCount, Math.max(0, (x / this.w) * this.songMeasureCount));
   }
 
-  /** x, width of the lane-stats bar for the i-th displayed column (0 = leftmost, lane 9). */
+  /** x, width of the lane-stats bar for the i-th displayed column (0 = leftmost, stored lane 9). */
   private laneBarX(i: number): { x: number; barW: number } {
     const margin = 8;
     const gap = 3;
@@ -878,8 +879,8 @@ export class NotePreviewRenderer {
     ctx.font = "9px ui-monospace, monospace";
     ctx.textAlign = "center";
     for (let i = 0; i < LANES; i++) {
-      // Displayed left-to-right as lane 9 (leftmost) .. lane 1 (rightmost), matching the
-      // fan above and the game's own lane numbering.
+      // Laid out left-to-right as stored lane 9 (leftmost) .. lane 1 (rightmost), matching the
+      // fan above; the label under each bar is the displayed number, 1-9 from the left.
       const lane = LANES - i;
       const c = counts[lane - 1];
       const total = totals[lane - 1];
@@ -898,7 +899,7 @@ export class NotePreviewRenderer {
 
       ctx.fillStyle = COLORS.label;
       ctx.fillText(String(total), cx, barTop - 2);
-      ctx.fillText(String(lane), cx, bottom - 1);
+      ctx.fillText(String(displayLane(lane)), cx, bottom - 1);
     }
   }
 
@@ -932,7 +933,7 @@ export class NotePreviewRenderer {
       { key: "slide", label: "Slide" },
       { key: "flick", label: "Flick" },
     ];
-    const lines = [`Lane ${lane}: ${total} (${pct(total, grandTotal)}%)`];
+    const lines = [`Lane ${displayLane(lane)}: ${total} (${pct(total, grandTotal)}%)`];
     for (const { key, label } of kinds) {
       const n = counts[key];
       if (n > 0) lines.push(`${label}: ${n} (${pct(n, total)}%)`);

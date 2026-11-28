@@ -11,6 +11,9 @@ Version 1.1.0
   - Added an About dialog (the "i" button at the top right) showing the
     version, links to the download page and the source repository, and
     credits.
+  - Lane numbers on screen (above the editing area, under the bar chart, in
+    the Settings lane keys, and in chart-check messages) now count 1 to 9
+    from the left. Charts themselves are unchanged.
   - Added a "Note colors" setting: the preview can color notes by the song's
     attribute (Smile uses the tap color, Pure the hold color, Cool the slide
     color) instead of by note type. Flick notes stay purple.
@@ -152,6 +155,9 @@ Version 20260827
 --------------------------------------------------------------------------------
   - 「About」ダイアログを追加(右上の「i」ボタン)。バージョン、配布ページと
     ソースコードのリポジトリへのリンク、クレジットを表示します。
+  - 画面に表示するレーン番号(編集画面の上部、棒グラフの下、「Settings」の
+    レーンキー、譜面チェックのメッセージ)を、左から1〜9になるように変更。
+    譜面のデータ自体は変わりません。
   - 「Note colors」設定を追加。プレビューで、ノーツの種類ごとの色ではなく、
     曲の属性の色で表示できます(Smileはタップノーツ、Pureはホールドノーツ、
     Coolはスライドノーツの色)。フリックノーツは紫のままです。

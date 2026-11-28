@@ -4,7 +4,7 @@ import type { ProjectData, SifNote } from "../types.js";
 import { DIFFICULTIES } from "../types.js";
 import { Player } from "./audio.js";
 import type { TickSound } from "./audio.js";
-import { ChartDoc, allocateSlideId, round6 } from "./chart.js";
+import { ChartDoc, allocateSlideId, displayLane, round6 } from "./chart.js";
 import type { Note, NoteKind } from "./chart.js";
 import { buildTempoMap, buildTimeSigMap, gridStepSec } from "./tempo.js";
 import type { TempoMap } from "./tempo.js";
@@ -1288,7 +1288,7 @@ export async function createEditor(
     }),
   );
   laneKeyInputs.forEach((input, i) => {
-    input.title = `Lane ${9 - i} key — click, then press a key to change it`;
+    input.title = `Lane ${displayLane(9 - i)} key — click, then press a key to change it`;
     input.addEventListener("keydown", (e) => {
       // Let Tab/Shift/other pure modifiers, and any Ctrl/Alt/Meta combo (Ctrl+S and
       // friends), pass through untouched instead of capturing them — only Tab's own
@@ -1310,7 +1310,7 @@ export async function createEditor(
       e.preventDefault();
       const dupIndex = laneKeys.findIndex((k, j) => j !== i && k.toLowerCase() === e.key.toLowerCase());
       if (dupIndex !== -1) {
-        toast(`"${e.key}" is already lane ${9 - dupIndex}'s key`, "error");
+        toast(`"${e.key}" is already lane ${displayLane(9 - dupIndex)}'s key`, "error");
         return;
       }
       laneKeys[i] = e.key;
@@ -1322,7 +1322,7 @@ export async function createEditor(
     });
   });
   const laneKeyCells = laneKeyInputs.map((input, i) =>
-    el("div", { class: "lane-key-cell" }, el("span", { class: "lane-key-num", text: String(9 - i) }), input),
+    el("div", { class: "lane-key-cell" }, el("span", { class: "lane-key-num", text: String(displayLane(9 - i)) }), input),
   );
 
   function resetLaneKeys(): void {
@@ -1953,7 +1953,7 @@ export async function createEditor(
       ["Checkbox right of Snap to grid", "Moving notes lands the earliest selected note on the grid (rest keep their relative positions)"],
       ["Click/drag song density strip (preview)", "Seek — shows a time/measure tooltip"],
       ["⛶ button (preview, top right) / F11", "Full-screen preview, laid out like the in-game screen — F11, Esc or ✕ to exit; ⏮ in its header goes back to the start, and playing from the start shows the song's jacket, title and artist"],
-      ["A S D F G H J K L", "Place a tap at the playhead, in lanes 9→1 left to right — works during playback; hold the key while playing to place a hold instead. Keys, input offset, and hold threshold all configurable in ⚙ Settings"],
+      ["A S D F G H J K L", "Place a tap at the playhead, in lanes 1→9 left to right — works during playback; hold the key while playing to place a hold instead. Keys, input offset, and hold threshold all configurable in ⚙ Settings"],
     ];
     openDialog(
       "Shortcuts",
