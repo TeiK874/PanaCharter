@@ -101,7 +101,7 @@ binaries on every push and attaches them to a Forgejo release on every tag.
 | Drag on empty space (select tool) | Box select |
 | `Del` | Delete selection |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
-| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste at the playhead |
+| `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy / cut / paste at the playhead — pasted notes that would start after the end of the song are skipped, and holds running past it are cut off at the last grid line inside the song (a message says how many) |
 | `Ctrl+Shift+V` | Paste mirrored (lanes flipped left-right) at the playhead |
 | `Ctrl+A` | Select all |
 | `Space` | Play / pause |

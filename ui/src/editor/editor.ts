@@ -2937,6 +2937,19 @@ export async function createEditor(
       const baseBeat = tm.beatAt(snapTime(player.time));
       // Distinct source chains get fresh ids so pasted copies don't merge into the originals.
       const slideIdMap = new Map<number, number>();
+      // Once the song's audio is loaded its length is known: a note that would start after
+      // the end can never be played, so it isn't pasted, and a hold (or a slide chain's
+      // closing hold) that starts before the end but runs past it is cut off at the last
+      // grid line inside the song.
+      const songEnd = player.loaded ? player.duration : Infinity;
+      const lastGridInSong = (): number => {
+        if (!hasGrid) return songEnd;
+        let slot = tm.slotAt(songEnd, snap); // the nearest line — step back if it's past the end
+        while (slot > 0 && tm.slotTime(slot, snap) > songEnd) slot--;
+        return tm.slotTime(slot, snap);
+      };
+      let skipped = 0;
+      let shortened = 0;
       d.edit(() => {
         d.selection.clear();
         for (const c of clipboard) {
@@ -2963,6 +2976,10 @@ export async function createEditor(
           };
           const rawT = tm.timeAt(baseBeat + c.dBeat);
           const t = landOnGrid(rawT);
+          if (t > songEnd) {
+            skipped++;
+            continue;
+          }
           let dur = 0;
           if (c.durBeat > 0) {
             const rawTail = tm.timeAt(baseBeat + c.dBeat + c.durBeat);
@@ -2970,6 +2987,18 @@ export async function createEditor(
             // a very short hold whose ends snap onto the same line keeps its raw length
             if (tail <= t) tail = t + Math.max(0, rawTail - rawT);
             dur = Math.max(0, tail - t);
+            if (t + dur > songEnd) {
+              let cutAt = lastGridInSong();
+              // no grid line fits between the head and the end: cut at the very end instead
+              if (cutAt <= t) cutAt = songEnd;
+              dur = cutAt - t;
+              // nothing left of a hold to place once it's cut down to no length
+              if (dur <= 0 && c.kind === "hold") {
+                skipped++;
+                continue;
+              }
+              shortened++;
+            }
           }
           let lane = c.lane;
           if(shift) {
@@ -2988,6 +3017,12 @@ export async function createEditor(
           d.selection.add(n.id);
         }
       });
+      if (skipped || shortened) {
+        const parts: string[] = [];
+        if (skipped) parts.push(`${skipped} note${skipped > 1 ? "s" : ""} past the end of the song not pasted`);
+        if (shortened) parts.push(`${shortened} hold${shortened > 1 ? "s" : ""} cut off at the end of the song`);
+        toast(parts.join(", "));
+      }
       return;
     }
     // Live lane-key tap/hold entry — independent of the selected tool, and works whether
